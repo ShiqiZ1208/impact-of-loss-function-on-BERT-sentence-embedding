@@ -30,7 +30,7 @@ python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL EPOCHS_DURING_FINETUNE
 
 ![Model Performance](result.png)
 
-## Example of Datasets
+## Datasets
 -STS-B: The Semantic Textual Similarity Benchmark (STS-B) is part of the GLUE benchmark and was originally introduced in the Semantic Evaluation (SemEval) 2017 shared task. It was designed to evaluate how well systems can measure the semantic similarity between two sentences on a scale from 0 (no meaning overlap) to 5 (equivalent meaning).
 The STS-B dataset includes sentence pairs drawn from various sources like news headlines, image captions, and forums, with human-annotated similarity scores.
 ```text
