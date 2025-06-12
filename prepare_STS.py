@@ -4,7 +4,6 @@ from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 from datasets import load_dataset
-from scipy.stats import spearmanr
 
 
 def get_sts_dataset(dataset_name, split=0.3):
@@ -30,12 +29,3 @@ class STSDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.sentence1[idx], self.sentence2[idx], self.label[idx]
 
-def prepare_dataset(dataset):
-    # Dataset Import...
-    ds = get_sts_dataset(dataset)
-
-    # Random Split...
-    train_test_split = ds.train_test_split(test_size=0.30)
-    train_dataset = train_test_split['train']
-    test_dataset = train_test_split['test']
-    return train_dataset, test_dataset
