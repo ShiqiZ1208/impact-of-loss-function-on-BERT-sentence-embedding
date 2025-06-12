@@ -31,7 +31,8 @@ python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL EPOCHS_DURING_FINETUNE
 ![Model Performance](result.png)
 
 ## Example of Datasets
--STS-B
+-STS-B: The Semantic Textual Similarity Benchmark (STS-B) is part of the GLUE benchmark and was originally introduced in the Semantic Evaluation (SemEval) 2017 shared task. It was designed to evaluate how well systems can measure the semantic similarity between two sentences on a scale from 0 (no meaning overlap) to 5 (equivalent meaning).
+The STS-B dataset includes sentence pairs drawn from various sources like news headlines, image captions, and forums, with human-annotated similarity scores.
 ```text
 the detial infromation of STS-B datasets:
 (Dataset({
@@ -40,7 +41,7 @@ the detial infromation of STS-B datasets:
 })
 ```
 
--STS12
+-STS12: The STS 2012 dataset was introduced in the Semantic Textual Similarity (STS) Task at SemEval-2012. It was the first in a series of STS shared tasks aimed at evaluating models' ability to assign similarity scores to sentence pairs.
 ```text
 the detial infromation of STS12 datasets:
 (Dataset({
@@ -49,7 +50,7 @@ the detial infromation of STS12 datasets:
 })
 ```
 
--STS13
+-STS13: The Semantic Textual Similarity 2013 (STS13) dataset was introduced in the SemEval-2013 Task 6, continuing the effort started in 2012 to benchmark systems that evaluate semantic similarity between sentence pairs. STS13 expanded the task by introducing new domains and further testing the generalizability of similarity models across different text types.
 ```text
 the detial infromation of STS13 datasets:
 (Dataset({
@@ -58,7 +59,7 @@ the detial infromation of STS13 datasets:
 })
 ```
 
--STS14
+-STS14: The Semantic Textual Similarity 2014 (STS14) dataset was introduced in the SemEval-2014 Task 10, continuing the STS series designed. aimed to test robustness across domains, incorporating sentence pairs from diverse sources.
 ```text
 the detial infromation of STS14 datasets:
 (Dataset({
@@ -67,7 +68,7 @@ the detial infromation of STS14 datasets:
 })
 ```
 
--STS15
+-STS15: The Semantic Textual Similarity 2015 (STS15) dataset was introduced in SemEval-2015 Task 2
 ```text
 the detial infromation of STS15 datasets:
 (Dataset({
@@ -76,7 +77,8 @@ the detial infromation of STS15 datasets:
 })
 ```
 
--STS16
+-STS16: The Semantic Textual Similarity 2016 (STS16) dataset was introduced as part of SemEval-2016 Task 1. Like its predecessors, STS16 evaluates systems’ ability to score the semantic similarity between pairs of sentences using a scale from 0 (no similarity) to 5 (semantic equivalence).
+
 ```text
 the detial infromation of STS16 datasets:
 (Dataset({
@@ -85,7 +87,8 @@ the detial infromation of STS16 datasets:
 })
 ```
 
--SICK-R
+-SICK-R: The Sentences Involving Compositional Knowledge - Relatedness (SICK-R) dataset was introduced in 2014 to support research on compositional semantic similarity and textual entailment.
+SICK-R consists of about 10,000 English sentence pairs, created by semi-automatically combining image captions and video descriptions. Each pair is annotated with a relatedness score ranging from 1 (completely unrelated) to 5 (highly related), capturing semantic similarity.
 ```text
 the detial infromation of SICK-R datasets:
 (Dataset({
