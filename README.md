@@ -26,6 +26,7 @@ cd /impact-of-loss-function-on-BERT-sentence-embedding
 # Step 2: run the code
 python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL_EPOCHS_DURING_FINETUNE
 ```
+- We have a quick start colab notebooks [Open this notebook in Colab]
 ## Performance Graph
 
 ![Model Performance](result.png)
