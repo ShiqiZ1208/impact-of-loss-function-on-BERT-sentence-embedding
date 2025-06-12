@@ -8,6 +8,7 @@ from datasets import load_dataset
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 from scipy.stats import spearmanr
+import argparse
 from prepare_STS import get_sts_dataset, STSDataset
 from Loss_Functions import cosine_similarity_mse_loss, cosine_similarity_mse_norm, cosent_loss, in_batch_negative_loss, angle_loss, cosent_ibn_angle
 
@@ -16,9 +17,29 @@ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 
 # set up some global variable for the program
 
+parser = argparse.ArgumentParser(description="TrainSE.py -b Batch_size -r total_runs -e epoches of each fine-tuning")
+parser.add_argument("-b", "--batch_size", )
+parser.add_argument("-r", "--total_runs", )
+parser.add_argument("-e", "--total_epochs", )
+args = parser.parse_args()
+#b_size = int(args.batch_size)
+#total_run  = int(args.total_runs)
+#epochs = int(args.total_epochs)
+if args.batch_size == None:
+  print("use default batch_size of 60")
+  b_size = 60
+else:
+  b_size = int(args.batch_size)
+if args.total_runs == None:
+  print("use default total run of 3")
+  total_run = 3
+else:
+  total_run  = int(args.total_runs)
+if args.total_epochs == None:
+  epochs = 10
+else:
+  epochs = int(args.total_epochs)
 # use BERT-base-uncased model for the base model
-total_run = 3
-b_size = 30
 model_id = 'bert-base-uncased'
 # The list of name of the datasets used in this experiments
 sts_datasets = ['STS-B', 'STS12', 'STS13', 'STS14', 'STS15', 'STS16', 'SICK-R']
@@ -137,7 +158,7 @@ def evaluate_sts(model, tokenizer, test_dataset, batch_size):
     spearman = calculate_Spearman_rank_correlation_coefficient(cosine_similarities, data_labels_np)
     return spearman
 
-def run(total_run, b_size):
+def run(total_run, b_size, epochs):
   total_runs = total_run
   batch_size = b_size
   spearman_list = []
@@ -159,7 +180,7 @@ def run(total_run, b_size):
 
               # Training Loop...
               if loss_name != 'without_ft':
-                  model = train(model, tokenizer, train_dataset, batch_size, epochs=5, loss_name=loss_name, **loss_kwargs)
+                  model = train(model, tokenizer, train_dataset, batch_size, epochs, loss_name=loss_name, **loss_kwargs)
 
               # Evaluation loop...
               spearman = evaluate_sts(model, tokenizer, test_dataset, batch_size)
@@ -168,4 +189,4 @@ def run(total_run, b_size):
           spearman_list.append({'loss': loss_name, 'dataset': dataset, 'spearman': total_spearman / total_runs})
   np.save('bert_sts_results.npy', np.array(spearman_list, dtype=object))
 
-run(total_run, b_size)
+run(total_run, b_size, epochs)
