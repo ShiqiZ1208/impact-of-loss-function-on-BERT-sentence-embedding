@@ -9,3 +9,19 @@ The detail article is on overleaf project: https://www.overleaf.com/read/bzzbwqf
 - Loss_Functions.py: Loss_Functions.py file is the python file include various of loss functions include default cosine similarity, COSENT, IBN and Angle losses and the combination of loss
   
 - TrainSE.py: TrainSE.py file is the python file that has Training loop, evaluation function and base model.
+
+## How to run the code
+Follow the steps below to set up and run the project:
+
+- clone the repo from github then directory to the repo
+```bash
+# Step 1: Clone the repository
+git clone https://github.com/ShiqiZ1208/impact-of-loss-function-on-BERT-sentence-embedding.git
+cd /impact-of-loss-function-on-BERT-sentence-embedding
+```
+
+- runing the Train.py code, -b refered to how many batch_size during fine-tune the model, -r refered to how many runs to average in order to get final result, -e refered to total eopchs takes during fine-tune the model.
+```bash
+# Step 2: run the code
+python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL EPOCHS_DURING_FINETUNE
+```
