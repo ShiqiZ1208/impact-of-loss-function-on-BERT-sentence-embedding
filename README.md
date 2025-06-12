@@ -39,3 +39,57 @@ the detial infromation of STS-B datasets:
     num_rows: 1379
 })
 ```
+
+-STS12
+```text
+the detial infromation of STS12 datasets:
+(Dataset({
+    features: ['split', 'sentence1', 'sentence2', 'labels'],
+    num_rows: 3108
+})
+```
+
+-STS13
+```text
+the detial infromation of STS13 datasets:
+(Dataset({
+    features: ['split', 'sentence1', 'sentence2', 'labels'],
+    num_rows: 1500
+})
+```
+
+-STS14
+```text
+the detial infromation of STS14 datasets:
+(Dataset({
+    features: ['split', 'sentence1', 'sentence2', 'labels'],
+    num_rows: 3750
+})
+```
+
+-STS15
+```text
+the detial infromation of STS15 datasets:
+(Dataset({
+    features: ['split', 'sentence1', 'sentence2', 'labels'],
+    num_rows: 3000
+})
+```
+
+-STS16
+```text
+the detial infromation of STS16 datasets:
+(Dataset({
+    features: ['split', 'sentence1', 'sentence2', 'labels'],
+    num_rows: 1186
+})
+```
+
+-SICK-R
+```text
+the detial infromation of SICK-R datasets:
+(Dataset({
+    features: ['sentence1', 'sentence2', 'labels'],
+    num_rows: 9927
+})
+```
