@@ -2,12 +2,6 @@
 A sentence embedding evaluation framework that tests the impact of different loss functions (Cosine similarity mean square error, COSENT, IN-Batch Negative, Angle loss and combination of various losses) on the quality and performance of sentence embeddings on STS datasets (STS-B, STS 12 to STS 16 and STS-K).
 The detail article is on overleaf project: https://www.overleaf.com/read/bzzbwqfxgrpn#1076e2
 
-## Table of Contents
-1. [Describtion on each python file](##Describtion on each python file)
-2. [How to run the code](##How to run the code)
-3. [Performance Graph](##Performance Graph)
-4. [Datasets](##Datasets)
-5. [Base model BERT-uncase-base](##Base model BERT-uncase-base)
 
 ## Describtion on each python file
 
