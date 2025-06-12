@@ -31,3 +31,11 @@ python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL EPOCHS_DURING_FINETUNE
 ![Model Performance](result.png)
 
 ## Example of Datasets
+-STS-B
+```text
+the detial infromation of STS-B datasets:
+(Dataset({
+    features: ['split', 'genre', 'dataset', 'year', 'sid', 'labels', 'sentence1', 'sentence2'],
+    num_rows: 1379
+})
+```
