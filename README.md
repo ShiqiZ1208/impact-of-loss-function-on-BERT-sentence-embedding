@@ -24,7 +24,7 @@ cd /impact-of-loss-function-on-BERT-sentence-embedding
 - runing the Train.py code, -b refered to how many batch_size during fine-tune the model, -r refered to how many runs to average in order to get final result, -e refered to total eopchs takes during fine-tune the model.
 ```bash
 # Step 2: run the code
-python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL EPOCHS_DURING_FINETUNE
+python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL_EPOCHS_DURING_FINETUNE
 ```
 ## Performance Graph
 
