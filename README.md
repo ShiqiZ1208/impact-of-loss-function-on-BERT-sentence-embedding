@@ -98,7 +98,8 @@ the detial infromation of SICK-R datasets:
 ```
 
 ## Base model BERT-uncase-base
--structure in huggingface
+-The BERT-base uncased model is a transformer-based language model designed to understand and generate natural language. It is pretrained on large amounts of English text where all words are converted to lowercase, which means it ignores casing differences. The model consists of 12 transformer encoder layers, each containing 12 self-attention heads. These layers work together to produce contextualized embeddings of input tokens. The hidden size of the model is 768, meaning each token is represented by a 768-dimensional vector.
+One important feature is the special [CLS] token at the start of every input, whose final hidden state is commonly used as a fixed-size summary representation of the entire sequence. This is especially useful for sentence embedding tasks. Overall, BERT-base uncased contains about 110 million parameters, striking a balance between performance and efficiency, making it a popular choice for many natural language processing applications.
 ```text
 BertModel(
   (embeddings): BertEmbeddings(
