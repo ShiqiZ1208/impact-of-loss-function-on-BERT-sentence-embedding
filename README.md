@@ -3,11 +3,11 @@ A sentence embedding evaluation framework that tests the impact of different los
 The detail article is on overleaf project: https://www.overleaf.com/read/bzzbwqfxgrpn#1076e2
 
 ## Table of Contents
-1. [Describtion on each python file](#Describtion on each python file)
-2. [How to run the code](#How to run the code)
-3. [Performance Graph](#Performance Graph)
-4. [Datasets](#Datasets)
-5. [Base model BERT-uncase-base](#Base model BERT-uncase-base)
+1. [Describtion on each python file](##Describtion on each python file)
+2. [How to run the code](##How to run the code)
+3. [Performance Graph](##Performance Graph)
+4. [Datasets](##Datasets)
+5. [Base model BERT-uncase-base](##Base model BERT-uncase-base)
 
 ## Describtion on each python file
 
