@@ -209,7 +209,7 @@ def run(total_run, b_size, epochs, lrate, modes="defualt"):
           average_list = []
           for loop_count in range(0, total_runs):
               # Dataset Preparation...
-              if modes == "defualt":
+              if modes == "default":
                 train_dataset, test_dataset, val_dataset = get_sts_dataset(dataset)
               elif modes == "eval":
                 train_dataset, test_dataset = get_sts_dataset(dataset, 0.3, modes)
@@ -221,9 +221,10 @@ def run(total_run, b_size, epochs, lrate, modes="defualt"):
               if loss_name != 'without_ft':
                   if modes == "defualt":
                     model, val_list = train(model, tokenizer, train_dataset, val_dataset, batch_size, epochs, lr, loss_name=loss_name, **loss_kwargs)
+                    all_lists.append(val_list)
                   elif modes == "eval":
                     model, val_list = train(model, tokenizer, train_dataset, test_dataset, batch_size, epochs, lr, loss_name=loss_name, **loss_kwargs)
-                  all_lists.append(val_list)
+                    all_lists.append(val_list)
                   #print(val_list)
               # Evaluation loop...
               spearman = evaluate_sts(model, tokenizer, test_dataset, batch_size)
