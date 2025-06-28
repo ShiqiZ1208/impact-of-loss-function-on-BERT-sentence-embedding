@@ -6,7 +6,7 @@ import pandas as pd
 from datasets import load_dataset
 
 
-def get_sts_dataset(dataset_name, split=0.3):
+def get_sts_dataset(dataset_name, split=0.3, modes = "defualt"):
     if dataset_name == 'STS-B':
         dataset_name = 'stsbenchmark'
     elif dataset_name == 'SICK-R':
@@ -15,7 +15,14 @@ def get_sts_dataset(dataset_name, split=0.3):
     dataset = dataset.rename_column('score', 'labels')
     dataset_split = dataset.train_test_split(test_size=split)
     train_dataset, test_dataset = dataset_split['train'], dataset_split['test']
-    return train_dataset, test_dataset
+    if modes == "defualt":
+      dataset_split_val = train_dataset.train_test_split(test_size=0.1)
+      train_dataset, val_dataset = dataset_split_val['train'], dataset_split_val['test']
+      return train_dataset, test_dataset, val_dataset
+    elif modes == "eval":
+      return train_dataset, test_dataset
+
+
 
 class STSDataset(torch.utils.data.Dataset):
     def __init__(self, sentence1, sentence2, label):
