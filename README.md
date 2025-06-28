@@ -21,10 +21,10 @@ git clone https://github.com/ShiqiZ1208/impact-of-loss-function-on-BERT-sentence
 cd /impact-of-loss-function-on-BERT-sentence-embedding
 ```
 
-- runing the Train.py code, -b refered to how many batch_size during fine-tune the model, -r refered to how many runs to average in order to get final result, -e refered to total eopchs takes during fine-tune the model.
+- runing the Train.py code, -b refered to how many batch_size during fine-tune the model, -r refered to how many runs to average in order to get final result, -e refered to total eopchs takes during fine-tune the model, -l reference the learning rate for AdamW optimizer, -mode reference how much validation set have two modes EVAL and Defualt.
 ```bash
 # Step 2: run the code
-python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL_EPOCHS_DURING_FINETUNE
+python TrainSE.py -b BATCH_SIZE -r TOTAL_RUN -e TOTAL_EPOCHS_DURING_FINETUNE -l 0.00001 -mode eval
 ```
 - We have a quick start colab notebooks [sample_run_on_sentenceEmbedding](https://github.com/ShiqiZ1208/impact-of-loss-function-on-BERT-sentence-embedding/blob/main/sample_run_on_sentenceEmbedding.ipynb)
 ## Performance Graph
