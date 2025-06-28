@@ -192,7 +192,7 @@ def evaluate_sts(model, tokenizer, test_dataset, batch_size):
     spearman = calculate_Spearman_rank_correlation_coefficient(cosine_similarities, data_labels_np)
     return spearman
 
-def run(total_run, b_size, epochs, lrate, modes="defualt"):
+def run(total_run, b_size, epochs, lrate, modes="default"):
   total_runs = total_run
   batch_size = b_size
   lr = lrate
@@ -219,7 +219,7 @@ def run(total_run, b_size, epochs, lrate, modes="defualt"):
 
               # Training Loop...
               if loss_name != 'without_ft':
-                  if modes == "defualt":
+                  if modes == "default":
                     model, val_list = train(model, tokenizer, train_dataset, val_dataset, batch_size, epochs, lr, loss_name=loss_name, **loss_kwargs)
                     all_lists.append(val_list)
                   elif modes == "eval":
