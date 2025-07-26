@@ -144,3 +144,8 @@ BertModel(
   )
 )
 ```
+## datasets distribution
+-We have conduct a test on dataset distribution and cosine similarity score on embedding on each datasets.
+```bash
+python Label_similarity.py -d 'STS-B' (dataset name)
+```
