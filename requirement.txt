@@ -1,4 +1,7 @@
+torch
 datasets
 transformers
 IsoScore
 umap-learn
+matplotlib
+seaborn
