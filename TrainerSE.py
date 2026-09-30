@@ -1,43 +1,73 @@
-from torch._C import parse_schema
+from torch._C import ModuleDict, parse_schema
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 from tqdm import tqdm
 from lossfunc import get_loss
+import random
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, pearsonr
 from torch.optim import AdamW
-from datapreprocess import prepare_dataset, STSDataset, TripDataset
+from datapreprocess import STSDataset, TripDataset, CLDataset
+from IsoScore.IsoScore import IsoScore
+from Label_similarity import generate_random_pair_distribution, generate_distribution, plot_clusters
+from sklearn.metrics import f1_score, precision_recall_curve, auc, accuracy_score
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import MiniBatchKMeans
+from sklearn.metrics import v_measure_score, normalized_mutual_info_score, adjusted_rand_score
 
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 class TrainerSE:
-    def __init__(self, model, device, tokenizer, model_id, mode='cls', lrate = 5e-5):
+    def __init__(self, model, device, tokenizer, model_id, loss_n, dataset_n, evaluate_metric, evaluation_sp_metric, evaluation_cl_metric, evaluation_ct_metric, lrate = 5e-5, pooling = "cls", is_seed = False, is_graph = False):
+        #print(lrate)
+        self.is_seed = is_seed
         self.model = model
         self.optimizer = AdamW(model.parameters(), lrate)
         self.device = device
         self.tokenizer = tokenizer
         self.model_id = model_id
-        self.ib = InformationBottleneck().to(self.device)
-    
+        self.is_llama = "llama" in model_id.lower()
+        self.loss_name = loss_n
+        self.train_dataset_name = dataset_n
+        self.pooling = pooling
+        self.evaluate_metric = evaluate_metric
+        self.evaluate_sp_metric = evaluation_sp_metric
+        self.evaluate_cl_metric = evaluation_cl_metric
+        self.evaluate_ct_metric = evaluation_ct_metric
+        self.is_graph = is_graph
 
-    def extract_embeddings(self, model, tokenizer, sentences, device, mode):
-        if self.model_id == 'mistralai/Mistral-7B-v0.1':
+
+
+
+    def extract_embeddings(self, model, tokenizer, sentences, device):
+        if self.is_llama:
           tokenizer.pad_token = tokenizer.eos_token
           model.config.pad_token_id = tokenizer.pad_token_id
         encodings = tokenizer(sentences, return_tensors='pt', padding=True, truncation=True).to(device)
-        output = model(**encodings, output_attentions=True, return_dict=True)
-        if mode.lower() =="cls":
+        #output = model(**encodings, output_attentions=True, output_hidden_states=True, return_dict=True)
+        need_attentions = self.pooling.lower() == 'attention'
+        need_hidden_states = self.pooling.lower() == 'mid_mean'
+        output = model(**encodings, output_attentions=need_attentions, output_hidden_states=need_hidden_states, return_dict=True)
+        if self.pooling.lower() =="cls":
           embeddings = output.last_hidden_state[:, 0, :]
-        elif mode.lower() == "mean":
+        elif self.pooling.lower() == "mean":
           token_embeddings = output.last_hidden_state
           attention_mask = encodings['attention_mask'].unsqueeze(-1)
           embeddings = (token_embeddings * attention_mask).sum(1) / attention_mask.sum(1)
-        elif mode.lower() == "max":
+        elif self.pooling.lower() == "max":
           token_embeddings = output.last_hidden_state
           attention_mask = encodings['attention_mask'].unsqueeze(-1).expand(token_embeddings.size())
           token_embeddings = token_embeddings.masked_fill(attention_mask == 0, -1e9)
           embeddings = token_embeddings.max(1).values
-        elif mode.lower() == "attention":
+        elif self.pooling.lower() == "attention":
           token_embeddings = output.last_hidden_state
           attention_mask = encodings['attention_mask'].unsqueeze(-1)
           last_attention = output.attentions[-1]
@@ -46,24 +76,68 @@ class TrainerSE:
           weights = weights * attention_mask.squeeze(-1)
           weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-8)
           embeddings = (token_embeddings * weights.unsqueeze(-1)).sum(dim=1)
-        return embeddings
+        elif self.pooling.lower() == "mid_mean":
+          hidden_states = output.hidden_states          # tuple: (embeddings, layer_1, ..., layer_N)
+          num_layers = len(hidden_states) - 1            # exclude embedding layer at index 0
+          layer_idx = getattr(self, 'layer_idx', num_layers // 2)  # defaults to middle transformer layer
+          token_embeddings = hidden_states[layer_idx]
+          attention_mask = encodings['attention_mask'].unsqueeze(-1)
+          embeddings = (token_embeddings * attention_mask).sum(1) / attention_mask.sum(1)
+
+        return embeddings.float()
+
+    def cal_mean_variance(self, train_dataset, batch_size, seed = 42, if_max = False):
+        if self.train_dataset_name == "snli":
+          if_max = True
+          print("max 1000 sample")
+        sample = 0
+        g = torch.Generator()
+        g.manual_seed(seed)
+        self.model.eval()
+        data_loader = DataLoader(STSDataset(train_dataset['sentence1'], train_dataset['sentence2'], train_dataset['labels']), batch_size=batch_size, shuffle=False, worker_init_fn=seed_worker, generator=g)
+        all_embeddings1 = []
+        all_embeddings2 = []
+
+        with torch.no_grad():
+            for sentences1, sentences2, labels in tqdm(data_loader, desc="calculating", leave=False):
+                #for every pair extract the embedding and labels append to the empty list created
+                embeddings1 = self.extract_embeddings(self.model, self.tokenizer, sentences1, self.device)
+                embeddings2 = self.extract_embeddings(self.model, self.tokenizer, sentences2, self.device)
+                all_embeddings1.append(embeddings1.cpu())
+                all_embeddings2.append(embeddings2.cpu())
+                sample = sample + 1
+                if if_max:
+                  if batch_size * sample > 1000:
+                    break
+
+        data_embeddings1 = torch.cat(all_embeddings1)
+        data_embeddings2 = torch.cat(all_embeddings2)
+
+        cosine_similarities = self.calculate_cosine_similarity(data_embeddings1, data_embeddings2)
+        mean = cosine_similarities.mean().item()
+        variance = cosine_similarities.var().item()
+
+        return mean, variance
 
 
-    def train_triplet(self, train_dataset, loss_name, loss_kwargs, num_epochs, batch_size, mode):
-        loss_function = get_loss(loss_name, **loss_kwargs)
-        total_loss = 0
-        num_batches = 0
-
+    def train_triplet(self, train_dataset, val_dataset, loss_kwargs, num_epochs, batch_size, seed = 42):
+        loss_function = get_loss(self.loss_name, **loss_kwargs)
+        if self.is_seed == True:
+            g = torch.Generator()
+            g.manual_seed(seed)
+        else:
+            g = None
+        loss_log = []
         for epoch in range(num_epochs):
             self.model.train()
-            data_loader = DataLoader(TripDataset(train_dataset['anchor'], train_dataset['positive'], train_dataset['negative']), batch_size=batch_size, shuffle=True)
+            data_loader = DataLoader(TripDataset(train_dataset['anchor'], train_dataset['positive'], train_dataset['negative']), batch_size=batch_size, shuffle=True , worker_init_fn=seed_worker, generator=g)
             for sentence1_texts, sentence2_texts, sentence3_texts in tqdm(data_loader, desc=f"Training Epoch {epoch+1}/{num_epochs}", leave=False):
 
                 self.optimizer.zero_grad()
 
-                anchor = self.extract_embeddings(self.model, self.tokenizer, sentence1_texts, self.device, mode)
-                positive = self.extract_embeddings(self.model, self.tokenizer, sentence2_texts, self.device, mode)
-                negative = self.extract_embeddings(self.model, self.tokenizer, sentence3_texts, self.device, mode)
+                anchor = self.extract_embeddings(self.model, self.tokenizer, sentence1_texts, self.device)
+                positive = self.extract_embeddings(self.model, self.tokenizer, sentence2_texts, self.device)
+                negative = self.extract_embeddings(self.model, self.tokenizer, sentence3_texts, self.device)
                 
                 loss = loss_function(anchor, positive, negative)
                 if torch.isnan(loss) or torch.isinf(loss):
@@ -72,126 +146,218 @@ class TrainerSE:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
 
-                total_loss += loss.item()
-                num_batches += 1
-                avg_loss = total_loss / max(num_batches, 1)
-        #print(f"Epoch {epoch+1}: Average loss = {avg_loss:.6f}")
+        return self.model, loss_log
 
-        return self.model
-
-    def train_base(self, train_dataset, loss_name, loss_kwargs, num_epochs, batch_size, mode):
-        loss_function = get_loss(loss_name, **loss_kwargs)
-        total_loss = 0
-        num_batches = 0
-
-        for epoch in range(num_epochs):
-            self.model.train()
-            data_loader = DataLoader(STSDataset(train_dataset['sentence1'], train_dataset['sentence2'], train_dataset['labels']), batch_size=batch_size, shuffle=True)
-            for sentence1_texts, sentence2_texts, labels in tqdm(data_loader, desc=f"Training Epoch {epoch+1}/{num_epochs}", leave=False):
-              
-                self.optimizer.zero_grad()
-                labels = labels.to(self.device)
-
-                sentence1_embeddings = self.extract_embeddings(self.model, self.tokenizer, sentence1_texts, self.device, mode)
-                sentence2_embeddings = self.extract_embeddings(self.model, self.tokenizer, sentence2_texts, self.device, mode)
-
-                loss = loss_function(sentence1_embeddings, sentence2_embeddings, labels)
-
-                if torch.isnan(loss) or torch.isinf(loss):
-                    continue
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
-
-                total_loss += loss.item()
-                num_batches += 1
-                avg_loss = total_loss / max(num_batches, 1)
-            #print(f"Epoch {epoch+1}: Average loss = {avg_loss:.6f}")
-
-        return self.model
-
-    def train_IB(self, train_dataset, loss_name, loss_kwargs, num_epochs, batch_size, mode):
-        loss_name = 'in_batch_negative_loss'
-        loss_function = get_loss(loss_name, **loss_kwargs)
-        total_loss_IB = 0
-        total_loss_cl = 0
-        total_loss = 0
-        num_batches = 0
-        i = 0
-        beta = 0
-        gamma = 0
-        #beta = 0.001
-        #gamma = 0.0005       
-
-        for epoch in range(num_epochs):
-            self.model.train()
-            data_loader = DataLoader(STSDataset(train_dataset['sentence1'], train_dataset['sentence2'], train_dataset['labels']), batch_size=batch_size, shuffle=True)
-            for sentence1_texts, sentence2_texts, labels in tqdm(data_loader, desc=f"Training Epoch {epoch+1}/{num_epochs}", leave=False):
-              
-                self.optimizer.zero_grad()
-                labels = labels.to(self.device)
-
-                sentence1_embeddings, mu1, logvar1, kl_loss1 = self.ib(self.extract_embeddings(self.model, self.tokenizer, sentence1_texts, self.device, mode))
-                sentence2_embeddings, mu2, logvar2, kl_loss2 = self.ib(self.extract_embeddings(self.model, self.tokenizer, sentence2_texts, self.device, mode))
-
-                BA_loss = barlow_twins_loss(sentence1_embeddings, sentence2_embeddings)
-                loss = loss_function(sentence1_embeddings, sentence2_embeddings, labels) + beta * (kl_loss1 + kl_loss2) + gamma * BA_loss
-
-                if torch.isnan(loss) or torch.isinf(loss):
-                    continue
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
-
-                total_loss_IB = beta * (kl_loss1 + kl_loss2).item()
-                total_loss_cl = (loss - beta * (kl_loss1 + kl_loss2)-gamma * BA_loss).item()
-                total_loss_BA = gamma * BA_loss.item()
-                total_loss += loss.item()
-                num_batches += 1
-                #avg_loss_IB = total_loss_IB / max(num_batches, 1)
-                #avg_loss_cl = total_loss_cl / max(num_batches, 1)
-                i = i + 1
-                if (i % 50) == 0:
-                  #beta = min(beta + i*0.001, 0.03)
-                  print(f"\nEpoch {epoch+1}: Average loss IB = {total_loss_IB:.6f}")
-                  print(f"Epoch {epoch+1}: Average loss CL = {total_loss_cl:.6f}")
-                  print(f"Epoch {epoch+1}: Average loss BA = {total_loss_BA:.6f}")
-                  print(f"Epoch {epoch+1}: Average loss total = {(total_loss/(i+1)):.6f}")
-        return self.model
-    
-    def train(self, train_dataset, loss_name, loss_kwargs, num_epochs, batch_size, mode = 'attention'):
-        if loss_name == "triplet":
-            return self.train_triplet(train_dataset, loss_name, loss_kwargs, num_epochs, batch_size, mode)
-        elif loss_name == "without_ft":
-            return self.model
-        elif loss_name == "IB":
-            return self.train_IB(train_dataset, loss_name, loss_kwargs, num_epochs, batch_size, mode)
+    def train_base(self, train_dataset, val_dataset, loss_kwargs, num_epochs, batch_size, seed=42, reval_datasets = [], is_eval = False):
+        loss_log = []
+        loss_function = get_loss(self.loss_name, **loss_kwargs)
+        sts_name = self.train_dataset_name
+        best_spearman = -1
+        best_model_state = None
+        if self.is_seed == True:
+            g = torch.Generator()
+            g.manual_seed(seed)
         else:
-            return self.train_base(train_dataset, loss_name, loss_kwargs, num_epochs, batch_size, mode)
+            g = None 
+        i = 0
+
+        for epoch in range(num_epochs):
+            self.model.train()
+            data_loader = DataLoader(STSDataset(train_dataset['sentence1'], train_dataset['sentence2'], train_dataset['labels']), batch_size=batch_size, shuffle=True, worker_init_fn=seed_worker, generator=g)
+            for sentence1_texts, sentence2_texts, labels in tqdm(data_loader, desc=f"Training Epoch {epoch+1}/{num_epochs}", leave=False):
+              
+                self.optimizer.zero_grad()
+                labels = labels.to(self.device)
+
+                sentence1_embeddings = self.extract_embeddings(self.model, self.tokenizer, sentence1_texts, self.device)
+                sentence2_embeddings = self.extract_embeddings(self.model, self.tokenizer, sentence2_texts, self.device)
+                
+                loss = loss_function(sentence1_embeddings, sentence2_embeddings, labels)
+                loss_log.append(loss.item())
+
+                if torch.isnan(loss) or torch.isinf(loss):
+                    continue
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+            
+            if is_eval == True:
+                results = self.evaluate_sts(val_dataset, sts_name, graph = False)
+                spearman = results['spearman']
+                if spearman > best_spearman:
+                  print(f"current spearman{spearman}")
+                  best_spearman = spearman
+                  best_model_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+
+        if is_eval == True:
+            self.model.load_state_dict(best_model_state)
+        return self.model, loss_log
+
+
+    def train(self, train_dataset, val_dataset, loss_kwargs, num_epochs, batch_size, seed = 42, is_eval = False):
+        if self.loss_name == "triplet":
+            return self.train_triplet(train_dataset, val_dataset, loss_kwargs, num_epochs, batch_size, seed, is_eval)
+        elif self.loss_name == "without_ft":
+            return self.model, []
+        else:
+            return self.train_base(train_dataset, val_dataset, loss_kwargs, num_epochs, batch_size, seed, is_eval)
 
     def calculate_cosine_similarity(self, data_embeddings1, data_embeddings2):
         cosine_similarity = F.cosine_similarity(data_embeddings1, data_embeddings2, dim=1)
         return cosine_similarity
+    
+    def AnglE_similarity(self, data_embeddings1, data_embeddings2):       
+        y_pred_re1, y_pred_im1 = torch.chunk(data_embeddings1, 2, dim=1)
+        y_pred_re2, y_pred_im2 = torch.chunk(data_embeddings2, 2, dim=1)
 
-    def calculate_Spearman_rank_correlation_coefficient(self, scores, scores_actual):
-        sc, _ = spearmanr(scores, scores_actual)
+        a = y_pred_re1
+        b = y_pred_im1
+        c = y_pred_re2
+        d = y_pred_im2
+
+        z = torch.sum(c**2 + d**2, dim=1, keepdim=True)
+        re = (a * c + b * d) / z
+        im = (b * c - a * d) / z
+
+        dz = torch.sum(a**2 + b**2, dim=1, keepdim=True)**0.5
+        dw = torch.sum(c**2 + d**2, dim=1, keepdim=True)**0.5
+        re /= (dz / dw)
+        im /= (dz / dw)
+
+        y_pred = torch.concat((re, im), dim=1)
+        y_pred = torch.abs(torch.sum(y_pred, dim=1))
+
+        return y_pred
+
+    def calculate_Spearman_rank_correlation_coefficient(self, data_embeddings1, data_embeddings2, scores_actual):
+        if self.loss_name != 'angle_loss':
+            cosine_similarities = self.calculate_cosine_similarity(data_embeddings1, data_embeddings2)
+        else:
+            cosine_similarities = self.AnglE_similarity(data_embeddings1, data_embeddings2)
+        if self.is_llama:
+          cosine_similarities = cosine_similarities.detach().cpu().float().numpy()
+          cosine_similarities = np.asarray(cosine_similarities, dtype=np.float32)
+          scores_actual = np.asarray(scores_actual, dtype=np.float32)
+        sc, _ = spearmanr(cosine_similarities, scores_actual)
         return sc
 
-    def evaluate_sts(self, test_dataset, batch_size, mode):
-        self.model.eval()
+    def calculate_Person_rank_correlation_coefficient(self, data_embeddings1, data_embeddings2, scores_actual):
+        if self.loss_name != 'angle_loss':
+            cosine_similarities = self.calculate_cosine_similarity(data_embeddings1, data_embeddings2)
+        else:
+            cosine_similarities = self.AnglE_similarity(data_embeddings1, data_embeddings2)
+        if self.is_llama:
+          cosine_similarities = cosine_similarities.detach().cpu().float().numpy()
+          cosine_similarities = np.asarray(cosine_similarities, dtype=np.float32)
+          scores_actual = np.asarray(scores_actual, dtype=np.float32)
+        pc, _  = pearsonr(cosine_similarities, scores_actual)
+        return pc
 
-        test_dataloader = DataLoader(STSDataset(test_dataset['sentence1'], test_dataset['sentence2'], test_dataset['labels']), batch_size=batch_size)
+    def random_embedding_similarity(self, embeddings1, embeddings2, scores_actual, n_samples=10000):
+        all_embeddings = torch.cat([embeddings1, embeddings2], dim=0)
+        
+        all_embeddings = torch.unique(all_embeddings, dim=0)
+
+        n = len(all_embeddings)
+        n_samples = min(n_samples, n * (n - 1))
+
+        idx1 = torch.randint(0, n, (n_samples,))
+        idx2 = torch.randint(0, n, (n_samples,))
+
+        mask = idx1 != idx2
+        idx1, idx2 = idx1[mask], idx2[mask]
+        all_embeddings = all_embeddings.float()
+        # reuse your existing function
+        sims = self.calculate_cosine_similarity(
+            all_embeddings[idx1], 
+            all_embeddings[idx2]
+        )
+        if self.is_graph == True:
+            generate_random_pair_distribution(sims, self.loss_name, self.model_id, self.pooling, self.train_dataset_name, self.train_dataset_name)
+        return sims.mean().item()
+
+    def measure_isoscore(self, embeddings1, embeddings2, scores_actual):
+        all_embeddings = torch.cat([embeddings1, embeddings2], dim=0)
+        all_embeddings_np = all_embeddings.float().detach().numpy()
+        score = IsoScore(all_embeddings_np)
+        return score
+
+    def measure_discriminability(self, embeddings1, embeddings2, labels, 
+                              range_percentiles=None):
+        range_label = max(labels) - min(labels)
+        pos_threshold = (2/3) * range_label
+        #print(pos_threshold)
+        neg_threshold = (1/3) * range_label
+        #print(neg_threshold)
+        if self.is_llama:
+            embeddings1 = embeddings1.float()
+            embeddings2 = embeddings2.float()
+        sims = self.calculate_cosine_similarity(embeddings1, embeddings2)
+        
+        # convert labels to tensor if numpy
+        if isinstance(labels, np.ndarray):
+            labels = torch.tensor(labels)
+        
+        # split by human labels
+        positive_mask = labels >= pos_threshold  # clearly similar
+        negative_mask = labels <= neg_threshold  # clearly dissimilar
+        
+        # check enough samples exist
+        n_pos = positive_mask.sum().item()
+        n_neg = negative_mask.sum().item()
+        
+        if n_pos == 0 or n_neg == 0:
+            print(f"Warning: not enough samples (pos={n_pos}, neg={n_neg})")
+            print(f"Consider lowering pos_threshold or raising neg_threshold")
+            return None
+        
+        pos_sims = sims[positive_mask]
+        neg_sims = sims[negative_mask]
+        
+        # compute gap
+        pos_mean = pos_sims.mean().item()
+        neg_mean = neg_sims.mean().item()
+        gap = pos_mean - neg_mean  # larger = better
+
+        if range_percentiles is None:
+            sim_min, sim_max = sims.min().item(), sims.max().item()
+        else:
+            lo, hi = range_percentiles
+            q = torch.tensor([lo / 100, hi / 100], device=sims.device, dtype=sims.dtype)
+            sim_min, sim_max = torch.quantile(sims, q).tolist()
+
+        sim_range = sim_max - sim_min
+        relative_gap = gap / sim_range if sim_range > 1e-12 else float('nan')
+        
+        return relative_gap
+
+    def evaluate_sts(self, test_dataset, test_name, graph = True):
+        self.model.eval()
+        metric_fns = {
+            'spearman': self.calculate_Spearman_rank_correlation_coefficient,
+            'pearson': self.calculate_Person_rank_correlation_coefficient,
+            'rand_mean': self.random_embedding_similarity,
+            'isoscore': self.measure_isoscore,
+            'disc_gap': self.measure_discriminability
+        }
+
+        test_dataloader = DataLoader(STSDataset(test_dataset['sentence1'], test_dataset['sentence2'], test_dataset['labels']), batch_size=90)
         all_embeddings1 = []
         all_embeddings2 = []
         all_labels = []
 
+        all_sentences1 = []
+        all_sentences2 = []
+        i = 0
         with torch.no_grad():
-            for sentences1, sentences2, labels in tqdm(test_dataloader, desc="Extracting", leave=False):
+            for sentences1, sentences2, labels in tqdm(test_dataloader, disable=False, desc="Extracting", leave=False):
                 #for every pair extract the embedding and labels append to the empty list created
-                embeddings1 = self.extract_embeddings(self.model, self.tokenizer, sentences1, self.device, mode)
-                embeddings2 = self.extract_embeddings(self.model, self.tokenizer, sentences2, self.device, mode)
+                embeddings1 = self.extract_embeddings(self.model, self.tokenizer, sentences1, self.device)
+                embeddings2 = self.extract_embeddings(self.model, self.tokenizer, sentences2, self.device)
                 all_embeddings1.append(embeddings1.cpu())
                 all_embeddings2.append(embeddings2.cpu())
+                all_sentences1.extend(sentences1)
+                all_sentences2.extend(sentences2)
                 all_labels.append(labels.cpu())
 
         data_embeddings1 = torch.cat(all_embeddings1)
@@ -199,53 +365,157 @@ class TrainerSE:
         data_labels = torch.cat(all_labels)
         data_labels_np = data_labels.numpy()
 
-        cosine_similarities = self.calculate_cosine_similarity(data_embeddings1, data_embeddings2)
-        spearman = self.calculate_Spearman_rank_correlation_coefficient(cosine_similarities, data_labels_np)
-        return spearman
-
-    def evaluate_all_sts(self, test_datasets, batch_size, mode):
-        self.model.eval()
-        spearman_list = []
-        for test_dataset in test_datasets:
-            test_dataloader = DataLoader(STSDataset(test_dataset['sentence1'], test_dataset['sentence2'], test_dataset['labels']), batch_size=batch_size)
-            #data_loader = DataLoader(test_dataset, batch_size=batch_size)
-            all_embeddings1 = []
-            all_embeddings2 = []
-            all_labels = []
-
-            with torch.no_grad():
-                for sentences1, sentences2, labels in tqdm(test_dataloader, desc="Extracting", leave=False):
-                    embeddings1= self.extract_embeddings(self.model, self.tokenizer, sentences1, self.device, mode)
-                    embeddings2= self.extract_embeddings(self.model, self.tokenizer, sentences2, self.device, mode)
-                    all_embeddings1.append(embeddings1.cpu())
-                    all_embeddings2.append(embeddings2.cpu())
-                    all_labels.append(labels.cpu())
-
-            data_embeddings1 = torch.cat(all_embeddings1)
-            data_embeddings2 = torch.cat(all_embeddings2)        
-            data_labels = torch.cat(all_labels)
-            data_labels_np = data_labels.numpy()
-
+        if self.loss_name != 'angle_loss':
             cosine_similarities = self.calculate_cosine_similarity(data_embeddings1, data_embeddings2)
-            spearman = self.calculate_Spearman_rank_correlation_coefficient(cosine_similarities, data_labels_np)
-            spearman_list.append(spearman)
-        return spearman_list
+        else:
+            cosine_similarities = self.AnglE_similarity(data_embeddings1, data_embeddings2)
+        results = []
+        for m in self.evaluate_metric:
+            fn = metric_fns[m]
+            results.append(fn(data_embeddings1, data_embeddings2, data_labels))
+        if self.is_graph and graph:
+            generate_distribution(self.model_id, self.pooling, self.loss_name, self.train_dataset_name, test_name, cosine_similarities, data_labels)
+        return results
 
-    def evaluate_sts_IB(self, test_dataset, batch_size, mode):
+    def evaluate_all_sts(self, test_datasets):
+        evaluation_result = []
+        for name, test_dataset in test_datasets.items():
+            results = self.evaluate_sts(test_dataset, name)
+            result_set = {}
+            for i, metric in enumerate(self.evaluate_metric):
+                result_set[metric] = results[i]
+            evaluation_result.append(result_set)
+        return evaluation_result
+
+    def sweep(self, sims, labels):
+        sims, labels = np.asarray(sims, float), np.asarray(labels, int)
+        order = np.argsort(-sims, kind="mergesort")
+        s, y = sims[order], labels[order]
+        tp = np.cumsum(y)
+        fp = np.cumsum(1 - y)
+        last = np.r_[np.diff(s) != 0, True]
+        return s[last], tp[last], fp[last], y.sum(), len(y)
+
+    def calculate_F1(self, sims, labels):
+        t, tp, fp, n_pos, n = self.sweep(sims, labels)
+        fn = n_pos - tp
+        tn = (n - n_pos) - fp
+        f1 = 2 * tp / np.maximum(2 * tp + fp + fn, 1)
+        return f1
+
+    def calculate_accuracy(self, sims, labels):
+        t, tp, fp, n_pos, n = self.sweep(sims, labels)
+        fn = n_pos - tp
+        tn = (n - n_pos) - fp
+        acc = (tp + tn) / n
+        return acc
+
+    def best_acc_thresholds(self, sims, labels):
+      t, _, _, _, _ = self.sweep(sims, labels)
+      acc = self.calculate_accuracy(sims, labels)
+      return t[np.argmax(acc)]
+
+    def best_f1_thresholds(self, sims, labels):
+      t, _, _, _, _ = self.sweep(sims, labels)
+      f1 = self.calculate_F1(sims, labels)
+      return t[np.argmax(f1)]
+
+    def calculate_AP(self, sims, labels):
+        _, tp, fp, n_pos, _ = self.sweep(sims, labels)
+        if n_pos == 0:
+            return float("nan")
+        precision = tp / (tp + fp)
+        recall = tp / n_pos
+        return float(np.sum(np.diff(np.r_[0.0, recall]) * precision))
+
+    def calculate_ROC_AUC(self, sims, labels):
+
+        _, tp, fp, n_pos, n = self.sweep(sims, labels)
+        n_neg = n - n_pos
+        if n_pos == 0 or n_neg == 0:
+            return float("nan")
+        tpr = np.r_[0.0, tp / n_pos]
+        fpr = np.r_[0.0, fp / n_neg]
+        return float(np.trapezoid(tpr, fpr))
+
+    def f1_at(self, sims, labels, thr):
+        sims = np.asarray(sims)
+        labels = np.asarray(labels)
+
+        pred = (sims >= thr).astype(int)
+
+        tp = np.sum((pred == 1) & (labels == 1))
+        fp = np.sum((pred == 1) & (labels == 0))
+        fn = np.sum((pred == 0) & (labels == 1))  
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+        if precision + recall == 0:
+            return 0.0
+        return 2 * precision * recall / (precision + recall)
+
+    def accuracy_at(self, sims, labels, thr):
+        sims = np.asarray(sims)
+        labels = np.asarray(labels)
+
+        pred = (sims >= thr).astype(int)
+
+        correct = np.sum(pred == labels)
+        total = len(labels)
+
+        return correct / total
+
+    def evaluate_sp(self, val_dataset, test_dataset):
         self.model.eval()
-
-        test_dataloader = DataLoader(STSDataset(test_dataset['sentence1'], test_dataset['sentence2'], test_dataset['labels']), batch_size=batch_size)
+        #print(val_dataset)
+        test_dataloader = DataLoader(STSDataset(test_dataset['sentence1'], test_dataset['sentence2'], test_dataset['labels']), batch_size=90)
+        val_dataloader = DataLoader(STSDataset(val_dataset['sentence1'], val_dataset['sentence2'], val_dataset['labels']), batch_size=90)
         all_embeddings1 = []
         all_embeddings2 = []
+        val_embeddings1 = []
+        val_embeddings2 = []
         all_labels = []
+        val_labels = []
+
+        all_sentences1 = []
+        all_sentences2 = []
+        val_sentences1 = []
+        val_sentences2 = []
+        i = 0
+        with torch.no_grad():
+            for sentences1, sentences2, labels in tqdm(val_dataloader, disable=False, desc="finding threshold", leave=False):
+                #for every pair extract the embedding and labels append to the empty list created
+                embeddings1 = self.extract_embeddings(self.model, self.tokenizer, sentences1, self.device)
+                embeddings2 = self.extract_embeddings(self.model, self.tokenizer, sentences2, self.device)
+                val_embeddings1.append(embeddings1.cpu())
+                val_embeddings2.append(embeddings2.cpu())
+                val_sentences1.extend(sentences1)
+                val_sentences2.extend(sentences2)
+                val_labels.append(labels.cpu())
+
+        val_embeddings1 = torch.cat(val_embeddings1)
+        val_embeddings2 = torch.cat(val_embeddings2)
+        val_labels = torch.cat(val_labels)
+        val_labels_np = val_labels.numpy()
+
+        if self.loss_name != 'angle_loss':
+            val_cosine_similarities = self.calculate_cosine_similarity(val_embeddings1, val_embeddings2)
+        else:
+            val_cosine_similarities = self.AnglE_similarity(val_embeddings1, val_embeddings2)
+
+        f1_threhold = self.best_f1_thresholds(val_cosine_similarities, val_labels)
+        acc_threshold = self.best_acc_thresholds(val_cosine_similarities, val_labels)
 
         with torch.no_grad():
-            for sentences1, sentences2, labels in tqdm(test_dataloader, desc="Extracting", leave=False):
+            for sentences1, sentences2, labels in tqdm(test_dataloader, disable=False, desc="Extracting", leave=False):
                 #for every pair extract the embedding and labels append to the empty list created
-                embeddings1, _, _, _ = self.ib(self.extract_embeddings(self.model, self.tokenizer, sentences1, self.device, mode), is_train = False)
-                embeddings2, _, _, _ = self.ib(self.extract_embeddings(self.model, self.tokenizer, sentences2, self.device, mode), is_train = False)
+                embeddings1 = self.extract_embeddings(self.model, self.tokenizer, sentences1, self.device)
+                embeddings2 = self.extract_embeddings(self.model, self.tokenizer, sentences2, self.device)
                 all_embeddings1.append(embeddings1.cpu())
                 all_embeddings2.append(embeddings2.cpu())
+                all_sentences1.extend(sentences1)
+                all_sentences2.extend(sentences2)
                 all_labels.append(labels.cpu())
 
         data_embeddings1 = torch.cat(all_embeddings1)
@@ -253,130 +523,141 @@ class TrainerSE:
         data_labels = torch.cat(all_labels)
         data_labels_np = data_labels.numpy()
 
-        cosine_similarities = self.calculate_cosine_similarity(data_embeddings1, data_embeddings2)
-        spearman = self.calculate_Spearman_rank_correlation_coefficient(cosine_similarities, data_labels_np)
-        return spearman
-
-    def evaluate_all_sts_IB(self, test_datasets, batch_size, mode):
-        self.model.eval()
-        spearman_list = []
-        for test_dataset in test_datasets:
-            test_dataloader = DataLoader(STSDataset(test_dataset['sentence1'], test_dataset['sentence2'], test_dataset['labels']), batch_size=batch_size)
-            #data_loader = DataLoader(test_dataset, batch_size=batch_size)
-            all_embeddings1 = []
-            all_embeddings2 = []
-            all_labels = []
-
-            with torch.no_grad():
-                for sentences1, sentences2, labels in tqdm(test_dataloader, desc="Extracting", leave=False):
-                    embeddings1, _, _, _= self.ib(self.extract_embeddings(self.model, self.tokenizer, sentences1, self.device, mode))
-                    embeddings2, _, _, _= self.ib(self.extract_embeddings(self.model, self.tokenizer, sentences2, self.device, mode))
-                    all_embeddings1.append(embeddings1.cpu())
-                    all_embeddings2.append(embeddings2.cpu())
-                    all_labels.append(labels.cpu())
-
-            data_embeddings1 = torch.cat(all_embeddings1)
-            data_embeddings2 = torch.cat(all_embeddings2)        
-            data_labels = torch.cat(all_labels)
-            data_labels_np = data_labels.numpy()
-
+        if self.loss_name != 'angle_loss':
             cosine_similarities = self.calculate_cosine_similarity(data_embeddings1, data_embeddings2)
-            spearman = self.calculate_Spearman_rank_correlation_coefficient(cosine_similarities, data_labels_np)
-            spearman_list.append(spearman)
-        return spearman_list
-
-    def evaluate(self, test_dataset, batch_size, dataset_name, loss_name):
-        if dataset_name == 'snli':
-            if loss_name != 'IB':
-              return self.evaluate_all_sts(test_dataset, batch_size, mode = 'attention')
-            else:
-              return self.evaluate_all_sts_IB(test_dataset, batch_size, mode = 'attention')
         else:
-            if loss_name !="IB":
-              return self.evaluate_sts(test_dataset, batch_size, mode = 'attention')
-            else:
-              return self.evaluate_sts_IB(test_dataset, batch_size, mode = 'attention')
-
-   
-
-class InformationBottleneck(nn.Module):
-    """
-    Simple Variational Information Bottleneck Layer
-    Input: embedding vector [batch_size, hidden_dim]
-    Output: compressed representation [batch_size, bottleneck_dim]
-    """
-    def __init__(self, input_dim = 768, bottleneck_dim = 768, beta = 1):
-        super().__init__()
-        self.input_dim = input_dim
-        self.bottleneck_dim = bottleneck_dim
-        self.beta = beta  # Trade-off parameter: higher β = more compression
-        self.logvar_min = -10
-        self.logvar_max = 10
+            cosine_similarities = self.AnglE_similarity(data_embeddings1, data_embeddings2)
+        results = []
+        ROC_AUC = self.calculate_ROC_AUC(cosine_similarities, data_labels)
+        AP = self.calculate_AP(cosine_similarities, data_labels)
+        F1 = self.f1_at(cosine_similarities, data_labels, f1_threhold)
+        acc = self.accuracy_at(cosine_similarities, data_labels, acc_threshold)
+        results.append(AP)
+        results.append(ROC_AUC)
+        results.append(F1)
+        results.append(acc)
+        results.append(f1_threhold)
+        results.append(acc_threshold)
+        return results
         
-        # Encoder: q(z|x) ~ N(μ(x), σ²(x))
-        self.fc_mu = nn.Linear(input_dim, bottleneck_dim)      # Mean
-        self.fc_logvar = nn.Linear(input_dim, bottleneck_dim)  # Log variance
-        
-    def encode(self, x):
-        """Convert input to mean and log-variance"""
-        mu = self.fc_mu(x)          # μ = f_μ(x)
-        logvar = self.fc_logvar(x)  # log(σ²) = f_logvar(x)
-        logvar = torch.clamp(logvar, self.logvar_min, self.logvar_max)
-        return mu, logvar
-    
-    def reparameterize(self, mu, logvar):
-        """Reparameterization trick: z = μ + ε·σ, ε ~ N(0, I)"""
-        std = torch.exp(0.5 * logvar)  # σ = exp(0.5 * log(σ²))
-        eps = torch.randn_like(std)     # ε ~ N(0, I)
-        z = mu + eps * std             # z = μ + ε·σ
-        return z
-    
-    def kl_divergence(self, mu, logvar):
-        """Compute KL(q(z|x) || N(0, I)) = -½ Σ(1 + log(σ²) - μ² - σ²)"""
-        kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-        return kl.mean()  # Average over batch
-    
-    def forward(self, x, is_train = True):
-        """
-        Forward pass through IB bottleneck
-        
-        Args:
-            x: Input embeddings [batch_size, input_dim]
-            return_stats: Whether to return statistics
-            
-        Returns:
-            z: Compressed representation [batch_size, bottleneck_dim]
-            If return_stats=True, also returns (mu, logvar, kl_loss)
-        """
-        mu, logvar = self.encode(x)       # Step 1: Get distribution parameters
-        z = self.reparameterize(mu, logvar)  # Step 2: Sample z
-        kl_loss = self.kl_divergence(mu, logvar)
-        if is_train:
-            return z, mu, logvar, self.beta * kl_loss
-        else:
-            return z, mu, logvar, self.beta * kl_loss
+    def evaluate_all_sp(self, val_dataset, test_datasets):
+        evaluation_result = []
+        for name, test_dataset in test_datasets.items():
+            results = self.evaluate_sp(val_dataset[name], test_dataset)
+            result_set = {}
+            for i, metric in enumerate(self.evaluate_sp_metric):
+                result_set[metric] = results[i]
+            evaluation_result.append(result_set)
+        return evaluation_result
 
-def off_diagonal(x):
-    n, m = x.shape
-    assert n == m
-    return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
-def barlow_twins_loss(z1, z2, lambda_coeff=5e-3):
-    # Normalize batch
-    z1 = (z1 - z1.mean(0)) / z1.std(0)
-    z2 = (z2 - z2.mean(0)) / z2.std(0)
 
-    N, D = z1.size()
+    def evaluate_sc(self, train_embedding, train_label, test_embedding, test_label):
 
-    # Cross-correlation
-    c = torch.mm(z1.T, z2) / N
+        scaler = StandardScaler().fit(train_embedding)
+        clf = LogisticRegressionCV(Cs=[0.01, 0.1, 1, 10, 100], cv=5, max_iter=2000)
+        clf.fit(scaler.transform(train_embedding), train_label)
 
-    # On-diagonal loss
-    on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
+        pred = clf.predict(scaler.transform(test_embedding))
+        return [accuracy_score(test_label, pred), f1_score(test_label, pred, average="macro"), clf.C_[0]]
 
-    # Off-diagonal loss
-    off_diag = off_diagonal(c).pow_(2).sum()
+    def evaluate_cl(self, val_dataset, test_dataset):
+        self.model.eval()
+        #print(val_dataset)
+        test_dataloader = DataLoader(CLDataset(test_dataset['text'], test_dataset['labels']), batch_size=90)
+        val_dataloader = DataLoader(CLDataset(val_dataset['text'], val_dataset['labels']), batch_size=90)
+        all_embeddings1 = []
+        val_embeddings1 = []
+        all_labels = []
+        val_labels = []
 
-    loss = on_diag + lambda_coeff * off_diag
-    return loss
-        
+        all_sentences1 = []
+        val_sentences1 = []
+        i = 0
+        with torch.no_grad():
+            for text, labels in tqdm(val_dataloader, disable=False, desc="training_classfier", leave=False):
+                #for every pair extract the embedding and labels append to the empty list created
+                embeddings1 = self.extract_embeddings(self.model, self.tokenizer, text, self.device)
+                val_embeddings1.append(embeddings1.cpu())
+                val_sentences1.extend(text)
+                val_labels.append(labels.cpu())
+
+        val_embeddings1 = torch.cat(val_embeddings1)
+        val_labels = torch.cat(val_labels)
+
+        with torch.no_grad():
+            for text, labels in tqdm(test_dataloader, disable=False, desc="Extracting", leave=False):
+                #for every pair extract the embedding and labels append to the empty list created
+                embeddings1 = self.extract_embeddings(self.model, self.tokenizer, text, self.device)
+                all_embeddings1.append(embeddings1.cpu())
+                all_sentences1.extend(text)
+                all_labels.append(labels.cpu())
+
+        data_embeddings1 = torch.cat(all_embeddings1)
+        data_labels = torch.cat(all_labels)
+        data_labels_np = data_labels.numpy()
+        acc_score, f1_score, _ = self.evaluate_sc(val_embeddings1, val_labels, data_embeddings1, data_labels)
+        results = []
+        results.append(acc_score)
+        results.append(f1_score)
+        return results
+
+    def evaluate_all_cl(self, val_dataset, test_datasets):
+        evaluation_result = []
+        for name, test_dataset in test_datasets.items():
+            results = self.evaluate_cl(val_dataset[name], test_dataset)
+            result_set = {}
+            for i, metric in enumerate(self.evaluate_cl_metric):
+                result_set[metric] = results[i]
+            evaluation_result.append(result_set)
+        return evaluation_result
+
+    def evaluate_clustering(self, embeddings, labels, seed=0):
+        X = np.asarray(embeddings, dtype=np.float32)
+        X = X / np.linalg.norm(X, axis=1, keepdims=True)
+        y = np.asarray(labels)
+        k = len(np.unique(y))
+
+        pred = MiniBatchKMeans(n_clusters=k, batch_size=32, n_init="auto",
+                              random_state=seed).fit_predict(X)
+
+        return v_measure_score(y, pred), normalized_mutual_info_score(y, pred), adjusted_rand_score(y, pred)
+
+
+    def evaluate_ct(self, test_dataset):
+        self.model.eval()
+        #print(val_dataset)
+        test_dataloader = DataLoader(CLDataset(test_dataset['sentences'], test_dataset['labels']), batch_size=90)
+        all_embeddings1 = []
+        all_labels = []
+
+        all_sentences1 = []
+        i = 0
+        with torch.no_grad():
+            for sentences, labels in tqdm(test_dataloader, disable=False, desc="Extracting", leave=False):
+                #for every pair extract the embedding and labels append to the empty list created
+                embeddings1 = self.extract_embeddings(self.model, self.tokenizer, sentences, self.device)
+                all_embeddings1.append(embeddings1.cpu())
+                all_sentences1.extend(sentences)
+                all_labels.append(labels.cpu())
+
+        data_embeddings1 = torch.cat(all_embeddings1)
+        data_labels = torch.cat(all_labels)
+        data_labels_np = data_labels.numpy()
+        v_measure, nmi, ari = self.evaluate_clustering(data_embeddings1, data_labels, seed=0)
+        results = []
+        results.append(v_measure)
+        results.append(nmi)
+        results.append(ari)
+        plot_clusters(data_embeddings1, data_labels, self.model_id, self.pooling, self.loss_name, self.train_dataset_name, n_points=5000, seed=0)
+        return results
+
+    def evaluate_all_ct(self, test_datasets):
+        evaluation_result = []
+        for name, test_dataset in test_datasets.items():
+            results = self.evaluate_ct(test_dataset)
+            result_set = {}
+            for i, metric in enumerate(self.evaluate_ct_metric):
+                result_set[metric] = results[i]
+            evaluation_result.append(result_set)
+        return evaluation_result

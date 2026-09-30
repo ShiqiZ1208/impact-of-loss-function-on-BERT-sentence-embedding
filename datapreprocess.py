@@ -8,175 +8,378 @@ from datasets import Value
 from datasets import concatenate_datasets
 from collections import defaultdict
 import random
-
+ 
+ 
+# ---------------------------------------------------------------------------
+# NLI helpers
+# ---------------------------------------------------------------------------
+ 
 def remap_labels_batch(batch):
+    '''
+    Remaps NLI's {entailment: 0, contradiction: 2} (after filtering out neutral)
+    to binary {contradiction: 0, entailment: 1}.
+    '''
     batch["labels"] = [
         1 if label == 0 else 0
         for label in batch["labels"]
     ]
     return batch
-
+ 
+ 
 def select_columns(example):
     columns_to_keep = ["sentence1", "sentence2", "labels"]
     return {col: example[col] for col in columns_to_keep}
+ 
+ 
+def rename_columns(dataset, type = 'nli'):
+    '''
+    Renames raw NLI columns (premise/hypothesis/label) to the STS-style
+    sentence1/sentence2/labels, filters to entailment (0) and contradiction (2)
+    only (drops neutral), and remaps entailment/contradiction to binary
+    similar/dissimilar labels (1/0).
+    '''
+    if type == 'nli':
+        # Rename to match the sentence1/sentence2 schema used by STS datasets
+        dataset = dataset.rename_column('premise', 'sentence1')
+        dataset = dataset.rename_column('hypothesis', 'sentence2')
+        dataset = dataset.rename_column('label', 'labels')
+    elif type == 'qqp':
+        dataset = dataset.rename_column('question1', 'sentence1')
+        dataset = dataset.rename_column('question2', 'sentence2')
+        dataset = dataset.rename_column('label', 'labels')
+    elif type == 'general':
+        dataset = dataset.rename_column('label', 'labels')
+    elif type == 'sms_spam':
+        dataset = dataset.rename_column('sms', 'text')
+        dataset = dataset.rename_column('label', 'labels')
 
-def rename_columns(dataset):
-    dataset = dataset.rename_column('premise', 'sentence1')
-    dataset = dataset.rename_column('hypothesis', 'sentence2')
-    dataset = dataset.rename_column('label', 'labels')
+    # NLI labels arrive as ints (0=entailment, 1=neutral, 2=contradiction);
+    # cast to float32 to match the label dtype used by STS datasets
     dataset = dataset.cast_column("labels", Value("float32"))
-    dataset_filtered = dataset.filter(
-        lambda batch: [label in {0, 2} for label in batch["labels"]],
-        batched=True
-        )
-    dataset = dataset_filtered.map(remap_labels_batch, batched=True)
-    return dataset
 
+    # Drop neutral (1): only entailment/contradiction give an unambiguous
+    # positive/negative pair, which is what contrastive training needs.
+    # Follows the SimCSE paper's supervised NLI setup.
+    if type == 'nli':
+        dataset_filtered = dataset.filter(
+            lambda batch: [label in {0, 2} for label in batch["labels"]],
+            batched=True
+        )
+
+        # Remap to binary: entailment(0) -> 1 (similar), contradiction(2) -> 0 (dissimilar)
+        dataset_remapped = dataset_filtered.map(remap_labels_batch, batched=True)
+
+        return dataset_remapped
+    else:
+        return dataset
+ 
+ 
 def Triplet_dataset(dataset_name):
-    #print(dataset_name)
+    '''
+    Builds (anchor, positive, negative) triplets from SNLI / MultiNLI / combined NLI.
+    For each premise, every entailing hypothesis is paired with a randomly chosen
+    contradicting hypothesis from the same premise. Premises with no negative
+    (or no positive) are dropped.
+    '''
     if dataset_name == "snli":
-        dataset = load_dataset(f'stanfordnlp/{dataset_name.lower()}', split='train')
+        dataset = load_dataset('stanfordnlp/snli', split='train')
         dataset = rename_columns(dataset)
     elif dataset_name == "multi_nli":
-        dataset = load_dataset(f'nyu-mll/{dataset_name.lower()}', split='train')
+        dataset = load_dataset('nyu-mll/glue', 'mnli', split='train')
         dataset = rename_columns(dataset)
-        dataset = dataset.map(select_columns,
-        remove_columns=[col for col in dataset.column_names if col not in ["sentence1", "sentence2", "labels"]])
+        # MultiNLI carries extra columns (e.g. genre, promptID) that SNLI doesn't;
+        # drop everything except sentence1/sentence2/labels so the schema matches
+        # SNLI's exactly (needed below for concatenate_datasets in the "nli" branch)
+        dataset = dataset.map(
+            select_columns,
+            remove_columns=[c for c in dataset.column_names if c not in ["sentence1", "sentence2", "labels"]]
+        )
     elif dataset_name == "nli":
-        snli = load_dataset(f'stanfordnlp/snli', split='train')
+        snli = load_dataset('stanfordnlp/snli', split='train')
         snli = rename_columns(snli)
-        multinli = load_dataset(f'nyu-mll/multi_nli', split='train')
-        multinli = rename_columns( multinli)
-        multinli = multinli.map(select_columns,
-        remove_columns=[col for col in multinli.column_names if col not in ["sentence1", "sentence2", "labels"]])
+        multinli = load_dataset('nyu-mll/glue', 'mnli', split='train')
+        multinli = rename_columns(multinli)
+        # Same column alignment as the multi_nli branch above -- concatenate_datasets
+        # requires both datasets to have identical column schemas
+        multinli = multinli.map(
+            select_columns,
+            remove_columns=[c for c in multinli.column_names if c not in ["sentence1", "sentence2", "labels"]]
+        )
         dataset = concatenate_datasets([snli, multinli])
+    else:
+        raise ValueError(f"Triplet_dataset: unsupported dataset_name '{dataset_name}' "
+                          f"(expected 'snli', 'multi_nli', or 'nli').")
+
+    # Group hypotheses by premise. Labels are already binary from rename_columns:
+    # 1 = entailment (positive), 0 = contradiction (negative); neutral was
+    # already dropped upstream, so no other label values should appear here.
     pairs = defaultdict(lambda: {"positive": [], "negative": []})
-
     for data in dataset:
-      if data["labels"] == 1:  # entailment
-          pairs[data["sentence1"]]["positive"].append(data["sentence2"])
-      elif data["labels"] == 0:  # contradiction
-          pairs[data["sentence1"]]["negative"].append(data["sentence2"])
-    valid_triplet = []
+        if data["labels"] == 1:  # entailment
+            pairs[data["sentence1"]]["positive"].append(data["sentence2"])
+        elif data["labels"] == 0:  # contradiction
+            pairs[data["sentence1"]]["negative"].append(data["sentence2"])
 
+    valid_triplet = []
     for premise, data in pairs.items():
-      if len(data["positive"]) > 0 and len(data["negative"]) > 0:  # only keep groups with both pos & neg
-          for pos in data["positive"]:
-              neg = random.choice(data["negative"])
-              valid_triplet.append({
-                  "anchor": premise,
-                  "positive": pos,
-                  "negative": neg
-              })
+        # A triplet needs both a positive and a negative; premises missing
+        # either side (e.g. only ever entailed, or only ever contradicted)
+        # are silently skipped here rather than raising or logging
+        if len(data["positive"]) > 0 and len(data["negative"]) > 0:
+            for pos in data["positive"]:
+                # Fresh random draw per positive, not once per premise --
+                # so two positives from the same premise can end up with
+                # different negatives, and the same negative may be reused
+                neg = random.choice(data["negative"])
+                valid_triplet.append({
+                    "anchor": premise,
+                    "positive": pos,
+                    "negative": neg
+                })
     print(f"Total triplets: {len(valid_triplet)}")
 
-    triplet_dataset = Dataset.from_list(valid_triplet)
-    return triplet_dataset
+    return Dataset.from_list(valid_triplet)
+ 
+ 
+# ---------------------------------------------------------------------------
+# Dataset loading
+# ---------------------------------------------------------------------------
+ 
+def get_sts_dataset(dataset_name, split='test', is_triplet=False):
+    '''
+    Takes a dataset_name and returns the corresponding dataset object from Hugging Face,
+    including STS datasets, NLI datasets, and some evaluation datasets.
+    For STS-B, it has train/validation/test splits, while the other STS datasets only have evaluation sets.
+    For the SemRel dataset, it has train/validation/test splits like STS-B and is used for the cross-domain task.
+    For SNLI, MultiNLI, and NLI datasets, it uses the NLI helper to return an STS-like training dataset with discrete labels.
+    For other evaluation datasets, it returns the evaluation set.
+    '''
+    if is_triplet:
+        return Triplet_dataset(dataset_name)
 
-def get_sts_dataset(dataset_name, is_triplet = False):
-    '''
-    get sts datasets using huggingface datasets.
-    input: dataset_name(string)
-    output: dataset (dictionary)
-    '''
-    #check all names of datasets
+    if dataset_name == "snli":
+        dataset = load_dataset('stanfordnlp/snli', split='train')
+        return rename_columns(dataset)
+
+    if dataset_name == "multi_nli":
+        dataset = load_dataset('nyu-mll/glue', 'mnli', split='train')
+        dataset = rename_columns(dataset)
+        return dataset.map(
+            select_columns,
+            remove_columns=[c for c in dataset.column_names if c not in ["sentence1", "sentence2", "labels"]]
+        )
+
+    if dataset_name == "nli":
+        snli = rename_columns(load_dataset('stanfordnlp/snli', split='train'))
+        multinli = load_dataset('nyu-mll/glue', 'mnli', split='train')
+        multinli = rename_columns(multinli)
+        multinli = multinli.map(
+            select_columns,
+            remove_columns=[c for c in multinli.column_names if c not in ["sentence1", "sentence2", "labels"]]
+        )
+        return concatenate_datasets([snli, multinli])
+
     if dataset_name == 'STS-B':
-        dataset_name = 'stsbenchmark'
-    elif dataset_name == 'SICK-R':
-        dataset_name = 'sickr'
-
-    if is_triplet == True:
-        print("true")
-        dataset = Triplet_dataset(dataset_name)
-    elif dataset_name == "snli":
-        dataset = load_dataset(f'stanfordnlp/{dataset_name.lower()}', split='train')
-        dataset = rename_columns(dataset)
-    elif dataset_name == "multi_nli":
-        dataset = load_dataset(f'nyu-mll/{dataset_name.lower()}', split='train')
-        dataset = rename_columns(dataset)
-        dataset = dataset.map(select_columns,
-         remove_columns=[col for col in dataset.column_names if col not in ["sentence1", "sentence2", "labels"]])
-    elif dataset_name == "nli":
-        snli = load_dataset(f'stanfordnlp/snli', split='train')
-        snli = rename_columns(snli)
-        multinli = load_dataset(f'nyu-mll/multi_nli', split='train')
-        multinli = rename_columns( multinli)
-        multinli = multinli.map(select_columns,
-         remove_columns=[col for col in multinli.column_names if col not in ["sentence1", "sentence2", "labels"]])
-        dataset = concatenate_datasets([snli, multinli])
-    else:
-        # load datasets from huggingface
-        dataset = load_dataset(f'mteb/{dataset_name.lower()}-sts', split='test')
-        # rename datasets columns score to labels
-        dataset = dataset.rename_column('score', 'labels')
-
-    return dataset
-
-
-
-def prepare_dataset(dataset_name, split=0.3, is_triplet = False):
-    '''
-    split sts dataset into train test and validation (if needed)
-    input: dataset_name (string), split (float), modes.
-    output: train_set, test_set, and val_set (if needed)
-    mode:
-    1, defualt: split test and train set in splite ratio, and random get 1/10 set for validation.
-    2, eval: split test and train set in splite ratio.
-    '''
-    # use get sts dataset to get dataset from huggingface datasets
-    if is_triplet == False:
-        dataset = get_sts_dataset(dataset_name)
-    else:
-        print("Triplet")
-        dataset =  get_sts_dataset(dataset_name, is_triplet = True)
-
-    # use dataset.train_test_split to split datasets into test and train
-    if dataset_name not in ["snli","multi_nli","nli","triplet"]:
-        dataset_split = dataset.train_test_split(test_size=split)
-        train_dataset, test_dataset = dataset_split['train'], dataset_split['test']
-    else:
-        test_dataset = []
-        train_dataset = dataset
-        datasets = ['STS-B', 'STS12', 'STS13', 'STS14', 'STS15', 'STS16', 'SICK-R']
-        for item in datasets:
-            test_dataset.append(get_sts_dataset(item))
-        
+        dataset = load_dataset('mteb/stsbenchmark-sts', split=split)
+        return dataset.rename_column('score', 'labels')
     
-    return train_dataset, test_dataset
+    if dataset_name == "SemRel":
+        dataset = load_dataset("SemRel/SemRel2024", 'eng', split=split)
+        return dataset.rename_column('label', 'labels')
+
+    if dataset_name == 'BIOSSES':
+        dataset = load_dataset("mteb/biosses-sts", split="test")
+        return dataset.rename_column('score', 'labels')
+    
+    if dataset_name == 'STS17':
+        dataset = load_dataset("mteb/sts17-crosslingual-sts","en-en", split="test")
+        return dataset.rename_column('score', 'labels')
+    
+    # STS12-16, SICK-R: test-only usage, carved into train/test by prepare_dataset
+    if split != 'test':
+        raise ValueError(
+            f"{dataset_name} only has a usable 'test' split on the hub — "
+            f"use prepare_dataset('{dataset_name}') to carve train/test out of it, "
+            f"rather than requesting split='{split}' here directly."
+        )
+    hub_name = 'sickr' if dataset_name == 'SICK-R' else dataset_name.lower()
+    dataset = load_dataset(f'mteb/{hub_name}-sts', split='test')
+    return dataset.rename_column('score', 'labels')
+ 
+def get_SP_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=False):
+    if dataset_name == "snli":
+        val_dataset = load_dataset('stanfordnlp/snli', split= f'validation[:{val_size}]')
+        eval_dataset = load_dataset('stanfordnlp/snli', split= f'test[:{test_size}]')
+        return rename_columns(val_dataset), rename_columns(eval_dataset)
+    if dataset_name == "multi_nli":
+        val_dataset_nmap = load_dataset('nyu-mll/glue', 'mnli', split=f'validation_matched[:{val_size}]')
+        eval_dataset_nmap = load_dataset('nyu-mll/glue', 'mnli', split=f'test_matched[:{test_size}]')
+        val_dataset = rename_columns(val_dataset_nmap)
+        eval_dataset = rename_columns(eval_dataset_nmap)
+        val_dataset.map(select_columns, remove_columns=[c for c in val_dataset.column_names if c not in ["sentence1", "sentence2", "labels"]])
+        eval_dataset.map(select_columns, remove_columns=[c for c in eval_dataset.column_names if c not in ["sentence1", "sentence2", "labels"]])
+        return val_dataset, eval_dataset
+    if dataset_name == "QQP":
+        val_dataset = load_dataset('nyu-mll/glue', 'qqp', split=f"train[:{val_size}]")
+        eval_dataset = load_dataset('nyu-mll/glue', 'qqp', split=f"validation[:{test_size}]")
+        return rename_columns(val_dataset, type = 'qqp'), rename_columns(eval_dataset, type = 'qqp')
+    if dataset_name == "MRPC":
+        val_dataset = load_dataset('nyu-mll/glue', 'mrpc', split=f"train[:{val_size}]")
+        eval_dataset = load_dataset('nyu-mll/glue', 'mrpc', split=f"test[:{test_size}]")
+        return rename_columns(val_dataset, type = 'general'), rename_columns(eval_dataset, type = 'general')
+    if dataset_name == "RTE":
+        val_dataset = load_dataset('nyu-mll/glue', 'rte', split=f"train[:{val_size}]")
+        eval_dataset = load_dataset('nyu-mll/glue', 'rte', split=f"validation[:{test_size}]")
+        return rename_columns(val_dataset, type = 'general'), rename_columns(eval_dataset, type = 'general')
+         
+
+def get_CL_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=False):
+    if dataset_name == 'MR':
+        val_dataset = load_dataset('cornell-movie-review-data/rotten_tomatoes', split= f'train[:{val_size}]')
+        eval_dataset = load_dataset('cornell-movie-review-data/rotten_tomatoes', split= f'test[:{test_size}]')
+        return rename_columns(val_dataset, type = 'general'), rename_columns(eval_dataset, type = 'general')
+    if dataset_name == 'CR':
+        val_dataset = load_dataset('SetFit/CR', split= f'train[:{val_size}]')
+        eval_dataset = load_dataset('SetFit/CR', split= f'test[:{test_size}]')
+        return rename_columns(val_dataset, type = 'general'), rename_columns(eval_dataset, type = 'general')
+    if dataset_name == 'subj':
+        val_dataset = load_dataset('SetFit/subj', split= f'train[:{val_size}]')
+        eval_dataset = load_dataset('SetFit/subj', split= f'test[:{test_size}]')
+        return rename_columns(val_dataset, type = 'general'), rename_columns(eval_dataset, type = 'general')
+    if dataset_name == 'sms_spam':
+        ds = load_dataset('ucirvine/sms_spam', split= f'train[:{val_size}]')
+        split = ds.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
+        val_dataset, eval_dataset = split['train'], split['test']
+        return rename_columns(val_dataset, type = 'sms_spam'), rename_columns(eval_dataset, type = 'sms_spam')
+    
+def get_CT_dataset(dataset_name):
+    if dataset_name == 'news_cluster':
+        eval_dataset = load_dataset('mteb/twentynewsgroups-clustering', split= 'test')
+        return eval_dataset[9]
+
+# ---------------------------------------------------------------------------
+# Train/test preparation
+# ---------------------------------------------------------------------------
+NLI_KEYS = ("snli", "multi_nli", "nli")
+STS_BENCHMARKS = ['STS-B', 'STS12', 'STS13', 'STS14', 'STS15', 'STS16', 'SICK-R']
+STS_VALID_NAME = STS_BENCHMARKS + ['STS17', 'BIOSSES', 'SemRel']
+SENTENCE_PAIR_VALID_NAME = ['QQP', 'MRPC', 'snli', 'multi_nli', 'RTE']
+CLASSIFICATION_VALID_NAME = ['MR', 'CR', 'subj', 'sms_spam']
+CLUSTERING_VALID_NAME = ['news_cluster']
+
+def STS_train_test_split(dataset_name, split=0.3, seed=42):
+    '''
+    STS12-16 and SICK-R are test-only on the hub, so they are carved into train/test.
+    A fixed seed guarantees both public functions see the same partition
+    (otherwise the eval split could overlap the train split).
+    '''
+    dataset = get_sts_dataset(dataset_name, split='test')
+    return dataset.train_test_split(test_size=split, seed=seed)
 
 
+def prepare_train_dataset(dataset_name, split=0.3, seed=42):
+    '''
+    Returns (train_dataset, val_dataset) for the given dataset name.
+    val_dataset is used only for best-checkpoint selection; [] means no validation set.
+    - NLI / SNLI / MultiNLI: the NLI training data, no validation set.
+    - STS:       STS-B train, STS-B validation.
+    - SemRel:    SemRel train, SemRel dev.
+    - STS-B:     STS-B train, no validation set.
+    - STS-ablation: STS-B train, no validation set.
+    - STS12-16, SICK-R: the carved train portion, no validation set.
+    '''
+    is_triplet = False
+    if dataset_name =="triplet":
+        is_triplet = True
+    if dataset_name in NLI_KEYS:
+        return get_sts_dataset(dataset_name, is_triplet=is_triplet), []
+ 
+    if dataset_name == "STS":
+        return (get_sts_dataset('STS-B', split='train'),
+                get_sts_dataset('STS-B', split='validation'))
+ 
+    if dataset_name == "SemRel":
+        return (get_sts_dataset('SemRel', split='train'),
+                get_sts_dataset('SemRel', split='dev'))
+ 
+    if dataset_name in ('STS-B', 'STS-ablation'):
+        return get_sts_dataset('STS-B', split='train'), []
+ 
+    return STS_train_test_split(dataset_name, split=split, seed=seed)['train'], []
+
+
+def prepare_eval_datasets(names=STS_BENCHMARKS):
+    '''Return {name: test_dataset}. Defaults to the seven STS benchmarks.'''
+    for n in names:
+        if n not in STS_VALID_NAME:
+            raise ValueError(f"Unknown STS eval dataset: {n}. Choose from {STS_VALID_NAME}")
+    return {n: get_sts_dataset(n, split='test') for n in names}
+
+def prepare_SP_eval_datasets(names = ['QQP']):
+    for n in names:
+        if n not in SENTENCE_PAIR_VALID_NAME:
+            raise ValueError(f"Unknown Sentence pair eval dataset: {n}. Choose from {SENTENCE_PAIR_VALID_NAME}")
+    return {n: get_SP_dataset(n) for n in names}
+
+def prepare_CL_eval_datasets(names = ['MR']):
+    for n in names:
+        if n not in CLASSIFICATION_VALID_NAME:
+            raise ValueError(f"Unknown Sentence pair eval dataset: {n}. Choose from {CLASSIFICATION_VALID_NAME}")
+    return {n: get_CL_dataset(n) for n in names}
+
+def prepare_CT_eval_datasets(names = ['news_cluster']):
+    for n in names:
+        if n not in CLUSTERING_VALID_NAME:
+            raise ValueError(f"Unknown Sentence pair eval dataset: {n}. Choose from {CLUSTERING_VALID_NAME}")
+    return {n: get_CT_dataset(n) for n in names}
+
+ 
 class STSDataset(torch.utils.data.Dataset):
     '''
-    an class for STSDataset
-    have function len and getitem for training process
+    A class for STSDataset.
+    Has __len__ and __getitem__ for the training process.
     '''
     def __init__(self, sentence1, sentence2, label):
         self.label = label
         self.sentence1 = sentence1
         self.sentence2 = sentence2
-
+ 
     def __len__(self):
-
-        # use the len of label to get the length of dataset
         return len(self.label)
-
+ 
     def __getitem__(self, idx):
-
-        # return the Setnence1, Sentence2 and the label for each data
         return self.sentence1[idx], self.sentence2[idx], self.label[idx]
-
+ 
+ 
 class TripDataset(torch.utils.data.Dataset):
-      '''
-      an class for triplet_Dataset
-      have function len and getitem for training process
-      '''
-      def __init__(self, anchor, positive, negative):
-          self.anchor = anchor
-          self.positive = positive
-          self.negative = negative
-
-      def __len__(self):
+    '''
+    A class for triplet Dataset.
+    Has __len__ and __getitem__ for the training process.
+    '''
+    def __init__(self, anchor, positive, negative):
+        self.anchor = anchor
+        self.positive = positive
+        self.negative = negative
+ 
+    def __len__(self):
         return len(self.anchor)
-
-      def __getitem__(self, idx):
+ 
+    def __getitem__(self, idx):
         return self.anchor[idx], self.positive[idx], self.negative[idx]
+    
+
+class CLDataset(torch.utils.data.Dataset):
+    '''
+    A class for STSDataset.
+    Has __len__ and __getitem__ for the training process.
+    '''
+    def __init__(self, text, label):
+        self.label = label
+        self.text = text
+ 
+    def __len__(self):
+        return len(self.label)
+ 
+    def __getitem__(self, idx):
+        return self.text[idx], self.label[idx]
+

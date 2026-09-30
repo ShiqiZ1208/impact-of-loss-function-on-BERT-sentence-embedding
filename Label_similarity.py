@@ -7,166 +7,162 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 import numpy as np
 import os
+import umap
+from scipy import stats
+from itertools import combinations
+import random
+import re
+import glob
+import seaborn as sns
+from sklearn.cluster import MiniBatchKMeans
 
-# check the device use cuda if possible
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
-def extract_embedding(model, tokenizer, device, sentences, to_numpy=False):
-    '''
-    extract the embedding layers from the model, The embedding is the CLS token on the right.
-    input: model, tokenizer, device, sentences (string)
-    output: the embedding score of sentences
-    '''
-    encodings = tokenizer(sentences, return_tensors='pt', padding=True, truncation=True).to(device)
-    # get the CLS tokens in the last hidden layer of the model
-    embeddings = model(**encodings).last_hidden_state[:, 0, :]
-
-    #detach and covert from tensor to numpy if needed
-    if to_numpy:
-        embeddings = embeddings.cpu().detach().numpy()
-    return embeddings
-
-
-def cosine_similarity_mse(embedding1, embedding2):
-    '''
-    extract cosine similarity score from two embeddings
-    input: embedding1, embedding2
-    return: cosine_sim score
-    '''
-    #cosine similarity between the pairs of embeddings using torch.nn
-    cos_sim = F.cosine_similarity(embedding1, embedding2)
-    return cos_sim
-
-
-def get_model_tokenizer(model_id):
-    '''
-    get the base model and tokenizer for sentence embedding.
-    input: model_id (string)
-    output: model and tokenizer
-    '''
-    #get pretrain model on huggingface
-    model = AutoModel.from_pretrained(model_id)
-    #get the tokenizer for pretrain BERT
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    #load model to the device
-    model.to(device)
-    return model, tokenizer
-
-def get_mean_from_dataset(datas, model, tokenizer):
-    dataset = get_sts_dataset(datas)
-    train_labels = np.array(dataset["labels"])
-    train_labels_means = (train_labels.mean())/5
-
-    label_list = []
-    dd = STSDataset(dataset['sentence1'], dataset['sentence2'], dataset['labels'])
-    length = len(dd)
-    sim_data_loader = DataLoader(dd, batch_size=10, shuffle=False)
-    with torch.no_grad():
-      for sentence1_texts, sentence2_texts, labels in tqdm(sim_data_loader, desc="sim_cal", leave=False):
-          labels = labels.to(device)
-
-          sentence1_embeddings = extract_embedding(model, tokenizer, device, sentence1_texts)
-          sentence2_embeddings = extract_embedding(model, tokenizer, device, sentence2_texts)
-
-          cos_simi = F.cosine_similarity(sentence1_embeddings, sentence2_embeddings)
-          cos_sim = cos_simi.detach().cpu()
-          label_list.append(cos_sim)
-          #label_list.append(labels.detach().cpu().float().numpy())
-    torch.cuda.empty_cache()
-    torch.cuda.ipc_collect()
-    all_labels = np.concatenate(label_list)
-    mean_diff = all_labels.mean() - train_labels_means
-    #print(mean_diff)
-
-    return mean_diff
+def to_np(x):
+    if torch.is_tensor(x):
+        return x.detach().cpu().float().numpy()
+    return np.asarray(x, dtype=float)
     
-def generate_distribution(model, tokenizer, datas, loss_name, display_label = False, is_graph =True):
+def generate_distribution(model_name, pooling, loss_name, train_dataset, test_dataset_name, cosine_similarity, labels):
     '''
     generate distribution graph using matplot
     input: model, tokenizer, data, spearman, loop num. loss name, display_label = False(if true will generate true label distribution)
     '''
-    is_snli = False
-    if datas == "snli":
-       datas = "SICK-R"
-       is_snli = True
-    if display_label == False:
-        model = model
-        tokenizer = tokenizer
-        model.eval()
-        cosli = []
-        d = get_sts_dataset(datas)
-        dd = STSDataset(d['sentence1'], d['sentence2'], d['labels'])
-        length = len(dd)
-        sim_data_loader = DataLoader(dd, batch_size=10, shuffle=False)
-        with torch.no_grad():
-            for sentence1_texts, sentence2_texts, labels in tqdm(sim_data_loader, desc="sim_cal", leave=False):
-              labels = labels.to(device)
+    directory = f"prediction_distribution/{model_name}_use_{pooling}/{loss_name}_on_{train_dataset}"
+    cosine_similarity = to_np(cosine_similarity)
+    labels = to_np(labels)
+    if labels.max() > 1:
+        labels = (labels - labels.min()) / (labels.max() - labels.min())
+    model_name = model_name.replace("/", "_")
 
-              sentence1_embeddings = extract_embedding(model, tokenizer, device, sentence1_texts)
-              sentence2_embeddings = extract_embedding(model, tokenizer, device, sentence2_texts)
+    if not os.path.exists(directory):
+        os.makedirs(directory)  # Create the directory (including parent dirs if needed)
+        print(f"Created directory: {directory}")
 
-              cos_simi = cosine_similarity_mse(sentence1_embeddings, sentence2_embeddings)
-              cos_sim = cos_simi.detach().tolist()
-              cosli.append(cos_sim)
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
+    sns.set_theme(style="whitegrid")
+    plt.figure(figsize=(8, 5))
+    lo = min(labels.min(), cosine_similarity.min())
+    bins = np.linspace(lo, 1.0, 51)
 
-        # Check if the directory exists
-        directory = "datasets_disttest"
-        if not os.path.exists(directory):
-          os.makedirs(directory)  # Create the directory (including parent dirs if needed)
+    # light histograms in the background
+    sns.histplot(labels, bins=bins, stat="density", color="steelblue", alpha=0.2, edgecolor=None)
+    sns.histplot(cosine_similarity,    bins=bins, stat="density", color="darkorange", alpha=0.2, edgecolor=None)
+
+    # smooth density curves on top
+    sns.kdeplot(labels, fill=True, color="steelblue", alpha=0.35, linewidth=2,
+                clip=(0, 1), bw_adjust=0.8, label="gold (rescaled 0–1)")
+    sns.kdeplot(cosine_similarity, fill=True, color="darkorange", alpha=0.35, linewidth=2,
+                clip=(lo, 1), bw_adjust=0.8, label="cosine similarity")
+
+    plt.xlabel("similarity")
+    plt.ylabel("density")
+    plt.title(f"{test_dataset_name}: {loss_name}")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{directory}/{test_dataset_name}_distribution.png", dpi=150)
+    plt.close()
+        
+
+def generate_random_pair_distribution(cos_sim, loss_name, model_id, pooling, train_name, test_name):
+      directory = f"Anistropy_Anlysis/random_embedding/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
+      if not os.path.exists(directory):
+          os.makedirs(directory)
           print(f"Created directory: {directory}")
 
-        coslo = [item for sublist in cosli for item in sublist]
-        coslo_array = np.array(coslo)
-        if is_snli:
-          np.save(f"{directory}/cos_sim_{datas}_{loss_name}_snli.npy", coslo_array)
-        else:
-          np.save(f"{directory}/cos_sim_{datas}_{loss_name}.npy", coslo_array)
-        bin_width = 0.05
-        bins = np.arange(0, max(coslo) + bin_width, bin_width)
+      plt.hist(cos_sim, bins=100, density=True, alpha=0.7, label=model_id)
+      plt.title(f"Anisotropy: {model_id}")
+      plt.axvline(cos_sim.mean(), linestyle='--', label=f"mean={cos_sim.mean():.4f}")
+      plt.xlabel("Cosine Similarity (random pairs)")
+      plt.ylabel("Density")
+      plt.xlim(-1, 1)
+      plt.ylim(0, 10)
+      plt.savefig(f'{directory}/{test_name}_random_Embedding.png')
+      plt.close()
+
+def plot_isoscore(n_comp=100, path="./Anistropy/chart/all.npz", out_dir="./Anistropy/chart"):
+    data = np.load(path)
+    os.makedirs(out_dir, exist_ok=True)
+
+    evrs, dims = {}, {}
+    for key in data.files:
+        emb = data[key]
+        if emb.shape[0] < 1000:
+            print(f"warning: {key} has only {emb.shape[0]} embeddings; spectrum tail will be unreliable")
+        n = min(n_comp, emb.shape[1], emb.shape[0] - 1)
+        evrs[key] = PCA(n_components=n).fit(emb).explained_variance_ratio_
+        dims[key] = emb.shape[1]
+
+    plt.figure(figsize=(7, 5))
+    for key, evr in evrs.items():
+        plt.plot(range(1, len(evr) + 1), evr, marker='o', ms=3, label=key)
+    plt.yscale('log')
+    plt.xlabel("Principal component")
+    plt.ylabel("Explained variance ratio (log)")
+    plt.title("Scree (flatter = more isotropic)")
+    plt.legend(fontsize=7)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"{out_dir}/scree_all.png", dpi=150)
+    plt.close()
+
+    plt.figure(figsize=(7, 5))
+    for key, evr in evrs.items():
+        plt.plot(range(1, len(evr) + 1), np.cumsum(evr), lw=2, label=key)
+    n_max = max(len(e) for e in evrs.values())
+    for D in sorted(set(dims.values())):
+        plt.plot(range(1, n_max + 1), np.arange(1, n_max + 1) / D, 'k--', alpha=0.5,
+                 label=f"perfect isotropy (D={D})")
+    plt.xlabel("Number of components")
+    plt.ylabel("Cumulative variance")
+    plt.title("Cumulative (closer to dashed = more isotropic)")
+    plt.legend(fontsize=7)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"{out_dir}/cumulative_all.png", dpi=150)
+    plt.close()
 
 
-        if is_graph == True:
-          plt.hist(coslo, bins=bins, edgecolor='black')
-          plt.title(f'cosine_similarity_{datas} with {loss_name}')
-          plt.xlabel('cosine_similarity_score')
-          plt.ylabel('Frequency')
-          plt.savefig(f"{directory}/{loss_name}_{datas}.png")
-          plt.close()
-        else:
-          print("without graph")
-    else:
-        directory = "datasets_distribution"
-        # Check if the directory exists
-        if not os.path.exists(directory):
-          os.makedirs(directory)  # Create the directory (including parent dirs if needed)
-          #print(f"Created directory: {directory}")
-          
-        label_list = []
-        d = get_sts_dataset(datas)
-        dd = STSDataset(d['sentence1'], d['sentence2'], d['labels'])
-        length = len(dd)
-        sim_data_loader = DataLoader(dd, batch_size=60, shuffle=False)
-        with torch.no_grad():
-            for sentence1_texts, sentence2_texts, labels in tqdm(sim_data_loader, desc="sim_cal", leave=False):
-                labels = divided_by_maximum(labels)
-                label_list.append(labels.detach().cpu().float().numpy())
-        torch.cuda.empty_cache()
-        torch.cuda.ipc_collect()
-        coslo = [item for sublist in label_list for item in sublist]
-        coslo_array = np.array(coslo)
-        np.save(f"{directory}/label_{datas}.npy", coslo_array)
-        bin_width = 0.05
-        bins = np.arange(0, max(coslo) + bin_width, bin_width)
+def plot_clusters(embeddings, labels, model_id, pooling, loss_name, train_name,
+                  dataset_name = 'news clustering', n_points=5000, seed=0):
+    # output folder, e.g. cluster/bert-base-uncased_use_mean/Batch_JS_div_on_STS-B
+    directory = f"cluster/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
+    os.makedirs(directory, exist_ok=True)
 
+    # L2-normalize so distances behave like cosine distance
+    X = np.asarray(embeddings, dtype=np.float32)
+    X = X / np.linalg.norm(X, axis=1, keepdims=True)
+    y = np.asarray(labels)
 
-        if is_graph == True:
-          plt.hist(coslo, bins=bins, edgecolor='black')
-          plt.title(f"{datas}'s distributions")
-          plt.xlabel('label score')
-          plt.ylabel('Frequency')
-          plt.savefig(f'./datasets_distribution/{datas} no nom label distribution.png')
-          plt.close()
+    # subsample so the plot stays readable and UMAP stays fast
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(len(X), size=min(n_points, len(X)), replace=False)
+    X, y = X[idx], y[idx]
+
+    # k-means with k = number of true classes
+    k = len(np.unique(y))
+    pred = MiniBatchKMeans(n_clusters=k, batch_size=32, n_init="auto",
+                           random_state=seed).fit_predict(X)
+
+    # 2D projection for plotting
+    Z = umap.UMAP(n_components=2, metric="cosine", random_state=seed).fit_transform(X)
+
+    # one graph: each color = one k-means cluster
+    plt.figure(figsize=(8, 7))
+    cmap = plt.get_cmap("tab20")
+    for c in np.unique(pred):
+        mask = pred == c
+        plt.scatter(Z[mask, 0], Z[mask, 1], s=3, alpha=0.7,
+                    color=cmap(c % 20), label=str(c + 1))   # clusters shown as 1..k
+
+    plt.legend(title="Cluster", bbox_to_anchor=(1.02, 1), loc="upper left",
+               fontsize=8, markerscale=4)
+    plt.title(f"{dataset_name}: K-means clusters ({loss_name}, {model_id})")
+    plt.xticks([]); plt.yticks([])
+    plt.tight_layout()
+
+    save_path = os.path.join(directory, f"{dataset_name}_clusters.png")
+    plt.savefig(save_path, dpi=200, bbox_inches="tight")
+    print(f"Saved cluster plot: {save_path}")
+    plt.close()
+

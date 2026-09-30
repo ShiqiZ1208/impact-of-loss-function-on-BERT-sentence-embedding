@@ -1,7 +1,8 @@
 import torch
 import numpy as np
 import torch.nn.functional as F
-
+from tqdm import tqdm
+from scipy.stats import pearsonr
 
 _loss_registry = {}
 
@@ -14,6 +15,7 @@ def register_loss(name):
 def divided_by_maximum(labels):
     return labels / torch.max(labels)
 
+
 def sigmoid(labels):
     labels = np.array(labels)
     return 1 / (1 + np.exp(-labels))
@@ -23,22 +25,36 @@ NORM_FUNCTIONS = {
     "sigmoid": sigmoid,
     "none": lambda x: x,  # No normalization
     "minmax": lambda x: (x - torch.min(x)) / (torch.max(x) - torch.min(x) + 1e-8),
+    "zero_one": lambda x: x/5,
+    "neg_one": lambda x:((x/5)*2-1)
 }
 
 @register_loss("cosine_similarity_mse_norm")
 def cosine_similarity_mse_norm(embedding1, embedding2, labels, norm):
+    #print(norm)
     norm_func = NORM_FUNCTIONS[norm]
     labels_norm = norm_func(labels)
+    #print(labels_norm)
     # Calculating the cosine similarity between the pairs of embeddings...
     cos_sim = F.cosine_similarity(embedding1, embedding2)
-
     # MSE loss...
     squared_difference = (labels_norm - cos_sim) ** 2
     loss = squared_difference.mean()
+
     #print("MSE",loss)
     return loss
 
-@register_loss("cosine_similarity_mse_norm_adj")
+def scale_labels_to_target(labels, target_mean, target_variance, eps=1e-8):
+    target_std = target_variance ** 0.5
+    labels_mean = labels.mean()
+    labels_std = labels.std()
+    
+    z = (labels - labels_mean) / (labels_std + eps)
+    
+    scaled_labels = z * target_std + target_mean
+    return scaled_labels
+
+@register_loss('mean_adjust_MSE')
 def cosine_similarity_mse_norm(embedding1, embedding2, labels, norm):
     norm_func = NORM_FUNCTIONS[norm]
     labels_norm = norm_func(labels)
@@ -46,50 +62,9 @@ def cosine_similarity_mse_norm(embedding1, embedding2, labels, norm):
     cos_sim = F.cosine_similarity(embedding1, embedding2)
 
     # MSE loss...
-    squared_difference = (labels_norm - cos_sim - 0.5) ** 2
+    squared_difference = (labels_norm - cos_sim) ** 2
     loss = squared_difference.mean()
     #print("MSE",loss)
-    return loss
-
-@register_loss("cosine_similarity_mse_mean")
-def cosine_similarity_mse_mean(embedding1, embedding2, labels, norm, mean = 0):
-    alpha = 0.5
-    mean = torch.tensor(mean, device=embedding1.device, dtype=embedding1.dtype)
-    norm_func = NORM_FUNCTIONS[norm]
-    labels_norm = norm_func(labels)
-    cos_sim = F.cosine_similarity(embedding1, embedding2)
-
-    squared_difference = (labels_norm - (cos_sim - mean)) ** 2
-
-    target_mean = labels_norm.mean().detach()
-    mean_penalty = (cos_sim.mean() - target_mean).abs()
-
-    loss = squared_difference.mean() + alpha * mean_penalty
-
-    return loss
-
-def covariance_matrix(x):
-    x = x.unsqueeze(1)
-    x = x - x.mean(dim=0, keepdim=True)
-    cov = (x.T @ x) / (x.size(0) - 1)
-    return cov
-
-@register_loss("cosine_similarity_mse_covar")
-def cosine_similarity_mse_covar(embedding1, embedding2, labels, norm):
-    alpha = 1
-    norm_func = NORM_FUNCTIONS[norm]
-    labels_norm = norm_func(labels)
-    cos_sim = F.cosine_similarity(embedding1, embedding2)
-
-    squared_difference = (labels_norm - cos_sim) ** 2
-
-
-    covar_cos_sim = covariance_matrix(cos_sim)
-    covar_labels_norm = covariance_matrix(labels_norm)
-    covar_loss = torch.norm(covar_cos_sim - covar_labels_norm, p='fro') ** 2 / (4 * 1 * 1)
-    mse_loss = squared_difference.mean()
-    loss = mse_loss + alpha * covar_loss
-
     return loss
 
 def kl_divergence(p, q, eps=1e-12):
@@ -102,133 +77,56 @@ def js_divergence(p, q, eps=1e-12):
     return 0.5 * kl_divergence(p, m, eps) + 0.5 * kl_divergence(q, m, eps)
 
 @register_loss("Batch_JS_div")
-def Batch_JS_div(embedding1, embedding2, labels, norm):
+def Batch_JS_div(embedding1, embedding2, labels, norm, tau):
+    #print(max(labels)-min(labels))
     norm_func = NORM_FUNCTIONS[norm]
     labels_norm = norm_func(labels)
-    cos_sim = F.cosine_similarity(embedding1, embedding2)
-    cos_prob = (cos_sim + 1) / 2
-    label_prob = (labels_norm + 1) / 2
 
-    cos_prob = cos_prob / cos_prob.sum(dim=-1, keepdim=True)
-    label_prob = label_prob / label_prob.sum(dim=-1, keepdim=True)
+    cos_sim = F.cosine_similarity(embedding1, embedding2)
+    cos_sim = norm_func(cos_sim)
+    cos_prob = F.softmax(cos_sim/tau, dim=0)
+    label_prob = F.softmax(labels_norm/tau, dim=0)
+
     
-    js_loss = js_divergence(label_prob, cos_prob).mean()
+    js_loss = js_divergence(label_prob, cos_prob)
     loss = js_loss
 
     return loss
 
-@register_loss("Batch_KL_div")
-def Batch_KL_div(embedding1, embedding2, labels, norm):
-    norm_func = NORM_FUNCTIONS[norm]
-    labels_norm = norm_func(labels)
+
+@register_loss("softmax_MSE")
+def softmax_MSE(embedding1, embedding2, labels, norm):
+    labels_norm = NORM_FUNCTIONS[norm](labels)
+
     cos_sim = F.cosine_similarity(embedding1, embedding2)
-    cos_prob = (cos_sim + 1) / 2
-    label_prob = (labels_norm + 1) / 2
+    cos_sim = NORM_FUNCTIONS[norm](cos_sim)
+    eps = 1e-8
 
-    cos_prob = cos_prob / cos_prob.sum(dim=-1, keepdim=True)
-    label_prob = label_prob / label_prob.sum(dim=-1, keepdim=True)
+    cos_prob = F.softmax(cos_sim, dim=0)
+    label_prob = F.softmax(labels_norm, dim=0)
 
-    KL_loss = kl_divergence(label_prob, cos_prob).mean()
+    M = 0.5 * (cos_prob + label_prob)
+    squared_difference = (label_prob - cos_prob) ** 2
+    loss = (1/8) * (squared_difference / (M + eps)).mean()
+    return loss
+
+
+@register_loss("Batch_KL_div")
+def Batch_KL_div(embedding1, embedding2, labels, norm, tau =1.0 ):
+    #norm_func = NORM_FUNCTIONS[norm]
+    #labels_norm = norm_func(labels)
+    eps = 1e-8
+    labels_norm = labels
+    cos_sim = F.cosine_similarity(embedding1, embedding2)
+    cos_sim = (cos_sim - cos_sim.min()) / (cos_sim.max() - cos_sim.min() + eps)
+    labels_norm = (labels_norm - labels_norm.min()) / (labels_norm.max() - labels_norm.min() + eps)
+    cos_prob = F.softmax(cos_sim/tau, dim=0)
+    label_prob = F.softmax(labels_norm/tau, dim=0)
+
+    KL_loss = kl_divergence(label_prob, cos_prob)
     loss = KL_loss
     return loss
 
-def to_histogram(x, num_bins=20, value_range=(0, 1)):
-    # x: [B, N]
-    B, N = x.shape
-
-    bin_edges = torch.linspace(
-        value_range[0],
-        value_range[1],
-        steps=num_bins + 1,
-        device=x.device
-    )
-
-    bin_idx = torch.bucketize(x, bin_edges) - 1
-    bin_idx = bin_idx.clamp(0, num_bins - 1)
-
-    hist = torch.zeros(
-        B, num_bins,
-        device=x.device,
-        dtype=x.dtype  # keep consistent
-    )
-
-    hist.scatter_add_(
-        1,
-        bin_idx,
-        torch.ones_like(x, dtype=hist.dtype)
-    )
-
-    hist = hist / (hist.sum(dim=1, keepdim=True) + 1e-12)
-    return hist
-
-@register_loss("cosine_similarity_Wasserstein")
-def cosine_similarity_Wasserstein(embedding1, embedding2, labels, norm):
-    alpha = 1
-    norm_func = NORM_FUNCTIONS[norm]
-    labels_norm = norm_func(labels)
-    cos_sim = F.cosine_similarity(embedding1, embedding2)
-
-    squared_difference = (labels_norm - cos_sim) ** 2
-    
-    mse_loss = squared_difference.mean()
-
-    cos_prob = (cos_sim + 1) / 2
-    label_prob = (labels_norm + 1) / 2
-
-    p = cos_prob / cos_prob.sum()
-    q = label_prob / label_prob.sum()
-
-    p_hist = to_histogram(cos_prob, num_bins=20, value_range=(0,1))
-    q_hist = to_histogram(labels_norm, num_bins=20, value_range=(0,1))
-
-    Fp = torch.cumsum(p, dim=0)
-    Fq = torch.cumsum(q, dim=0)
-
-    W_loss = torch.sum(torch.abs(Fp - Fq))
-    loss = mse_loss + alpha * W_loss
-    return loss
-
-def rbf_kernel(x, y, sigmas = [0.1, 0.5, 1.0]):
-  
-    x = x.unsqueeze(1)
-    y = y.unsqueeze(1)
-    x_norm = (x ** 2).sum(1).view(-1, 1)
-    y_norm = (y ** 2).sum(1).view(1, -1)
-    dist_sq = x_norm + y_norm - 2 * torch.mm(x, y.t())
-    return sum(torch.exp(-dist_sq / (2*s**2)) for s in sigmas)
-
-def mmd(x, y):
-
-    Kxx = rbf_kernel(x, x)
-    Kyy = rbf_kernel(y, y)
-    Kxy = rbf_kernel(x, y)
-
-    m = x.size(0)
-    n = y.size(0)
-
-    mmd_sq = (Kxx.sum() - Kxx.trace()) / (m * (m - 1)) \
-           + (Kyy.sum() - Kyy.trace()) / (n * (n - 1)) \
-           - 2 * Kxy.mean()
-
-    return torch.sqrt(mmd_sq + 1e-8)
-
-@register_loss("cosine_similarity_mmd")
-def cosine_similarity_mmd(embedding1, embedding2, labels, norm):
-    alpha = 0.2
-    norm_func = NORM_FUNCTIONS[norm]
-    labels_norm = norm_func(labels)
-
-    cos_sim = F.cosine_similarity(embedding1, embedding2)
-
-    labels = labels.to(cos_sim.device).to(cos_sim.dtype)
-    squared_difference = (labels_norm - cos_sim) ** 2
-    
-    mse_loss = squared_difference.mean()
-
-
-    mmd_loss = mmd(cos_sim, labels)
-    loss = mse_loss + alpha * mmd_loss
-    return loss
 
 def euclidean_distance(x, y, eps):
     return torch.sqrt(torch.sum((x - y) ** 2, dim=1) + eps)
@@ -266,6 +164,7 @@ def cosent_loss(embedding1, embedding2, labels, tau=20.0):
 def categorical_crossentropy(y_true, y_pred):
     return -(F.log_softmax(y_pred, dim=1) * y_true).sum(dim=1)
 
+
 @register_loss("in_batch_negative_loss")
 # Modify from https://github.com/SeanLee97/AnglE/blob/main/angle_emb/angle.py#L166
 def in_batch_negative_loss(embedding1, embedding2, labels, tau=20.0, negative_weights=0.0):
@@ -274,10 +173,11 @@ def in_batch_negative_loss(embedding1, embedding2, labels, tau=20.0, negative_we
     y_pred[0::2] = embedding1
     y_pred[1::2] = embedding2
     y_true = labels.repeat_interleave(2).unsqueeze(1)
-
+   
     def make_target_matrix(y_true):
         idxs = torch.arange(0, y_pred.shape[0]).int().to(device)
         y_true = y_true.int()
+        #print(y_true[:8, :8])
         idxs_1 = idxs[None, :]
         idxs_2 = (idxs + 1 - idxs % 2 * 2)[:, None]
 
@@ -288,6 +188,7 @@ def in_batch_negative_loss(embedding1, embedding2, labels, tau=20.0, negative_we
         idxs_2 += (y_true == 0).int() * -1
 
         y_true = (idxs_1 == idxs_2).float()
+        #print(y_true[:8, :8])
         return y_true
 
     neg_mask = make_target_matrix(y_true == 0)
@@ -304,8 +205,10 @@ def in_batch_negative_loss(embedding1, embedding2, labels, tau=20.0, negative_we
 
     return categorical_crossentropy(y_true, similarities).mean()
 
+
+
 @register_loss("angle_loss")
-def angle_loss(embedding1, embedding2, labels, tau=1.0):
+def angle_loss(embedding1, embedding2, labels, tau=20.0):
     labels = (labels[:, None] < labels[None, :]).float()
 
     # Chunking into real and imaginary parts...
@@ -336,11 +239,125 @@ def angle_loss(embedding1, embedding2, labels, tau=1.0):
 
 @register_loss("cosent_ibn_angle")
 def cosent_ibn_angle(embedding1, embedding2, labels, w_cosent=1, w_ibn=1, w_angle=1, tau_cosent=20.0, tau_ibn=20.0, tau_angle=1.0):
-    return w_cosent * cosent_loss(embedding1, embedding2, labels, tau_cosent) + w_ibn * in_batch_negative_loss(embedding1, embedding2, labels, tau_ibn) + w_angle * angle_loss(embedding1, embedding2, labels, tau_angle)
+    return w_cosent * cosent_loss(embedding1, embedding2, labels, tau_cosent) + w_ibn * in_batch_negative_loss_equivalent(embedding1, embedding2, labels, tau_ibn) + w_angle * angle_loss(embedding1, embedding2, labels, tau_angle)
 
-@register_loss("ibn_JSD")
-def ibn_JSD(embedding1, embedding2, labels, w_ibn = 1, w_JSD = 1, tau_ibn=20.0):
-    return w_ibn * in_batch_negative_loss(embedding1, embedding2, labels, tau_ibn) + w_JSD * Batch_JS_div(embedding1, embedding2, labels, 'divided_by_maximum')
+
+
+def build_label_matrix(labels, N):
+    label_matrix = torch.zeros(2*N, 2*N, device=labels.device)
+    #label_matrix = torch.full((2*N, 2*N), float('-inf'), device=labels.device)
+    label_matrix[:N, N:] = torch.diag(labels)   # top right block
+    label_matrix[N:, :N] = torch.diag(labels)   # bottom left block
+    return label_matrix
+
+def js_divergence_matrix(p, q, eps=1e-12):
+    p = torch.clamp(p, min=eps)
+    q = torch.clamp(q, min=eps)
+    m = 0.5 * (p + q)
+    kl_pm = (p * (torch.log(p) - torch.log(m))).sum(dim=-1)
+    kl_qm = (q * (torch.log(q) - torch.log(m))).sum(dim=-1)
+    return (0.5 * kl_pm + 0.5 * kl_qm).mean()
+
+@register_loss("contrastive_JSD")
+def contrastive_JSD_loss(embedding1, embedding2, labels, norm = 'divided_by_maximum', tau=20.0):
+    norm_func = NORM_FUNCTIONS[norm]
+    labels_norm = norm_func(labels)
+
+    N = embedding1.shape[0]
+
+    all_embeddings = torch.cat([embedding1, embedding2], dim=0)  # (2N, D)
+    sim_matrix = F.cosine_similarity(
+        all_embeddings.unsqueeze(1),   # (2N, 1, D)
+        all_embeddings.unsqueeze(0),   # (1, 2N, D)
+        dim=-1
+    )  # (2N, 2N)
+
+    mask = torch.eye(2*N, dtype=torch.bool, device=embedding1.device)
+    sim_matrix = sim_matrix.masked_fill(mask, float('-inf'))
+
+    label_matrix = build_label_matrix(labels_norm, N)
+    label_matrix = label_matrix.masked_fill(mask, float('-inf'))
+
+    neighbor_dist = F.softmax(sim_matrix, dim=-1)
+
+    label_dist = F.softmax(label_matrix, dim=-1)
+
+    # per-row JSD (don't average yet)
+    p = torch.clamp(label_dist, min=1e-12)
+    q = torch.clamp(neighbor_dist, min=1e-12)
+    m = 0.5 * (p + q)
+    kl_pm = (p * (torch.log(p) - torch.log(m))).sum(dim=-1)
+    kl_qm = (q * (torch.log(q) - torch.log(m))).sum(dim=-1)
+    jsd_per_row = 0.5 * kl_pm + 0.5 * kl_qm  # shape (2N,)
+
+    # graded weight: repeat labels_norm for both halves of the 2N rows
+    row_weight = torch.cat([labels_norm, labels_norm], dim=0)  # shape (2N,)
+
+    loss = (jsd_per_row * row_weight).mean()
+
+    return loss
+
+
+def ibn_to_jsd_format(embedding1, embedding2, labels, threshold=1.0):
+    N = embedding1.shape[0]
+    device = labels.device
+
+    label_matrix = torch.zeros((2*N, 2*N), device=device, dtype=torch.float32)
+
+    pos_mask = (labels >= threshold).float()
+    label_matrix[:N, N:] = torch.diag(pos_mask)
+    label_matrix[N:, :N] = torch.diag(pos_mask)
+
+    label_matrix.fill_diagonal_(0)
+    return label_matrix
+
+@register_loss('ibn')
+def in_batch_negative_loss_equivalent(embedding1, embedding2, labels, tau=20, threshold = 1.0):
+    #print(labels[0])
+    device = labels.device
+    N = embedding1.shape[0]
+
+    y_pred = torch.cat([embedding1, embedding2], dim=0)
+    y_pred = F.normalize(y_pred, dim=1, p=2)
+
+
+    cos_sim = y_pred @ y_pred.T
+    cos_sim = cos_sim - torch.eye(2*N, device=device) * 1e12
+    cos_sim = cos_sim * tau
+
+
+    label_matrix = ibn_to_jsd_format(embedding1, embedding2, labels, threshold)
+    label_matrix = (label_matrix != 0).float()
+
+    loss = -(F.log_softmax(cos_sim, dim=1) * label_matrix).sum(dim=1).mean()
+
+    return loss
+
+@register_loss("cosent_batch_jsd")
+def cosent_batch_jsd(embedding1, embedding2, labels, norm='divided_by_maximum',
+                      tau_cosent=20.0, w_jsd=0.3):
+    cosent_l = cosent_loss(embedding1, embedding2, labels, tau_cosent)
+    jsd_l = Batch_JS_div(embedding1, embedding2, labels, norm)
+
+    scale = cosent_l.detach() / (jsd_l.detach() + 1e-8)
+
+    return cosent_l + w_jsd * scale * jsd_l
+
+
+@register_loss("pearson_loss")
+def pearson_loss(embedding1, embedding2, labels, eps=1e-8):
+    cos_sim = F.cosine_similarity(embedding1, embedding2)
+
+    cos_sim_centered = cos_sim - cos_sim.mean()
+    labels_centered = labels - labels.mean()
+
+    numerator = (cos_sim_centered * labels_centered).sum()
+    denominator = torch.sqrt((cos_sim_centered ** 2).sum()) * torch.sqrt((labels_centered ** 2).sum())
+
+    pearson_score = numerator / (denominator + eps)
+    loss = 1 - pearson_score
+
+    return loss
 
 def get_loss(name, **kwargs):
     """Get loss function by name with parameters"""
