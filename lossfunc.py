@@ -31,17 +31,15 @@ NORM_FUNCTIONS = {
 
 @register_loss("cosine_similarity_mse_norm")
 def cosine_similarity_mse_norm(embedding1, embedding2, labels, norm):
-    #print(norm)
+
     norm_func = NORM_FUNCTIONS[norm]
     labels_norm = norm_func(labels)
-    #print(labels_norm)
-    # Calculating the cosine similarity between the pairs of embeddings...
     cos_sim = F.cosine_similarity(embedding1, embedding2)
-    # MSE loss...
+
     squared_difference = (labels_norm - cos_sim) ** 2
     loss = squared_difference.mean()
 
-    #print("MSE",loss)
+
     return loss
 
 def scale_labels_to_target(labels, target_mean, target_variance, eps=1e-8):
@@ -58,13 +56,13 @@ def scale_labels_to_target(labels, target_mean, target_variance, eps=1e-8):
 def cosine_similarity_mse_norm(embedding1, embedding2, labels, norm):
     norm_func = NORM_FUNCTIONS[norm]
     labels_norm = norm_func(labels)
-    # Calculating the cosine similarity between the pairs of embeddings...
+
     cos_sim = F.cosine_similarity(embedding1, embedding2)
 
-    # MSE loss...
+
     squared_difference = (labels_norm - cos_sim) ** 2
     loss = squared_difference.mean()
-    #print("MSE",loss)
+
     return loss
 
 def kl_divergence(p, q, eps=1e-12):
@@ -78,7 +76,7 @@ def js_divergence(p, q, eps=1e-12):
 
 @register_loss("Batch_JS_div")
 def Batch_JS_div(embedding1, embedding2, labels, norm, tau):
-    #print(max(labels)-min(labels))
+
     norm_func = NORM_FUNCTIONS[norm]
     labels_norm = norm_func(labels)
 
@@ -177,7 +175,7 @@ def in_batch_negative_loss(embedding1, embedding2, labels, tau=20.0, negative_we
     def make_target_matrix(y_true):
         idxs = torch.arange(0, y_pred.shape[0]).int().to(device)
         y_true = y_true.int()
-        #print(y_true[:8, :8])
+
         idxs_1 = idxs[None, :]
         idxs_2 = (idxs + 1 - idxs % 2 * 2)[:, None]
 
@@ -188,7 +186,7 @@ def in_batch_negative_loss(embedding1, embedding2, labels, tau=20.0, negative_we
         idxs_2 += (y_true == 0).int() * -1
 
         y_true = (idxs_1 == idxs_2).float()
-        #print(y_true[:8, :8])
+
         return y_true
 
     neg_mask = make_target_matrix(y_true == 0)
@@ -245,7 +243,7 @@ def cosent_ibn_angle(embedding1, embedding2, labels, w_cosent=1, w_ibn=1, w_angl
 
 def build_label_matrix(labels, N):
     label_matrix = torch.zeros(2*N, 2*N, device=labels.device)
-    #label_matrix = torch.full((2*N, 2*N), float('-inf'), device=labels.device)
+
     label_matrix[:N, N:] = torch.diag(labels)   # top right block
     label_matrix[N:, :N] = torch.diag(labels)   # bottom left block
     return label_matrix
@@ -282,7 +280,7 @@ def contrastive_JSD_loss(embedding1, embedding2, labels, norm = 'divided_by_maxi
 
     label_dist = F.softmax(label_matrix, dim=-1)
 
-    # per-row JSD (don't average yet)
+
     p = torch.clamp(label_dist, min=1e-12)
     q = torch.clamp(neighbor_dist, min=1e-12)
     m = 0.5 * (p + q)
@@ -290,8 +288,8 @@ def contrastive_JSD_loss(embedding1, embedding2, labels, norm = 'divided_by_maxi
     kl_qm = (q * (torch.log(q) - torch.log(m))).sum(dim=-1)
     jsd_per_row = 0.5 * kl_pm + 0.5 * kl_qm  # shape (2N,)
 
-    # graded weight: repeat labels_norm for both halves of the 2N rows
-    row_weight = torch.cat([labels_norm, labels_norm], dim=0)  # shape (2N,)
+
+    row_weight = torch.cat([labels_norm, labels_norm], dim=0) 
 
     loss = (jsd_per_row * row_weight).mean()
 

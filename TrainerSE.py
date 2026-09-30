@@ -1,10 +1,8 @@
-from torch._C import ModuleDict, parse_schema
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from tqdm import tqdm
 from lossfunc import get_loss
 import random
-import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,7 +12,7 @@ from torch.optim import AdamW
 from datapreprocess import STSDataset, TripDataset, CLDataset
 from IsoScore.IsoScore import IsoScore
 from Label_similarity import generate_random_pair_distribution, generate_distribution, plot_clusters
-from sklearn.metrics import f1_score, precision_recall_curve, auc, accuracy_score
+from sklearn.metrics import f1_score, accuracy_score
 from sklearn.linear_model import LogisticRegressionCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import MiniBatchKMeans

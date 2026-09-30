@@ -1,21 +1,10 @@
-from datasets import load_dataset
-from torch.utils.data import DataLoader, default_collate
 from datapreprocess import get_sts_dataset, STSDataset
-from lossfunc import divided_by_maximum
-from tqdm import tqdm
 import torch
-from transformers import AutoModel, AutoTokenizer
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import numpy as np
 import os
 import umap
-from scipy import stats
-from itertools import combinations
-import random
-import re
-import glob
 import seaborn as sns
 from sklearn.cluster import MiniBatchKMeans
 

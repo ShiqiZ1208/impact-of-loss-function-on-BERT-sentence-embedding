@@ -5,17 +5,21 @@ from transformers import logging
 import random
 
 from TrainerSE import TrainerSE
-from lossfunc import get_loss
 from datapreprocess import prepare_train_dataset, prepare_eval_datasets, prepare_SP_eval_datasets, prepare_CL_eval_datasets, prepare_CT_eval_datasets
 from transformers import AutoModel, AutoTokenizer
-import argparse
 import yaml
-from scipy.stats import spearmanr
+import torch, datasets
+from transformers.utils import logging
+import huggingface_hub
 
 os.environ["ACCELERATE_DISABLE_PROGRESS_BAR"] = "true"
 os.environ["DISABLE_TQDM"] = "1"
+datasets.disable_progress_bars()
+datasets.logging.set_verbosity_error()
+huggingface_hub.utils.logging.set_verbosity_error()
 logging.set_verbosity_error()
 logging.disable_progress_bar()
+
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 def load_training_config():
