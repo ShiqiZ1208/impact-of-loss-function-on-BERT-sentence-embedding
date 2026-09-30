@@ -152,6 +152,6 @@ def plot_clusters(embeddings, labels, model_id, pooling, loss_name, train_name,
 
     save_path = os.path.join(directory, f"{dataset_name}_clusters.png")
     plt.savefig(save_path, dpi=200, bbox_inches="tight")
-    print(f"Saved cluster plot: {save_path}")
+    #print(f"Saved cluster plot: {save_path}")
     plt.close()
 
