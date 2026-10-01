@@ -28,7 +28,7 @@ training:
   test_sts_name: ['SICK-R', 'STS17', 'BIOSSES', 'SemRel']
   test_sp_name: ['QQP', 'MRPC', 'snli'] # 'multi_nli', 'RTE'
   test_cl_name: ['MR', 'CR', 'subj', 'sms_spam']
-  test_ct_name: ['news_cluster']
+  test_ct_name: ['news_cluster', 'reddit', 'biorxiv', 'stack']
   evaluation_metric: ['spearman', 'pearson', 'rand_mean', 'isoscore', 'disc_gap']
   evaluation_metric_sp: ['AP', 'ROC_AUC', 'F1', 'accuracy', 'f1_threshold', 'ac_threshold']
   evaluation_metric_cl: ['ACC', 'F1']
