@@ -249,11 +249,60 @@ def get_CL_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=
         split = ds.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
         val_dataset, eval_dataset = split['train'], split['test']
         return rename_columns(val_dataset, type = 'sms_spam'), rename_columns(eval_dataset, type = 'sms_spam')
-    
-def get_CT_dataset(dataset_name):
+
+def load_clustering(hf_name, split='test', is_dup=False,
+                    max_per_class=200, seed=0):                  # NEW: two arguments
+    ds = load_dataset(hf_name, split=split)
+
+    # 1. merge all rows (handles both nested and flat formats)
+    if isinstance(ds[0]['sentences'], list):
+        sentences = [s for row in ds for s in row['sentences']]
+        labels    = [l for row in ds for l in row['labels']]
+    else:
+        sentences, labels = list(ds['sentences']), list(ds['labels'])
+
+    sents, labs = sentences, labels
+    # 2. remove duplicate texts (keep first occurrence)
+    if is_dup == True:
+        seen, sents, labs = set(), [], []
+        for s, l in zip(sentences, labels):
+            if s not in seen:
+                seen.add(s); sents.append(s); labs.append(l)
+
+    # 3. relabel: any label type (str or int) → 0..K-1
+    classes = sorted(set(map(str, labs)))
+    label2id = {c: i for i, c in enumerate(classes)}
+    labs = [label2id[str(l)] for l in labs]
+
+    # 4. NEW: optionally keep at most max_per_class samples per cluster
+    if max_per_class is not None:
+        rng = np.random.default_rng(seed)
+        labs_arr = np.asarray(labs)
+        keep = []
+        for c in np.unique(labs_arr):
+            c_idx = np.where(labs_arr == c)[0]
+            if len(c_idx) > max_per_class:
+                c_idx = rng.choice(c_idx, size=max_per_class, replace=False)
+            keep.extend(c_idx)
+        keep = np.sort(keep)
+        sents = [sents[i] for i in keep]
+        labs  = [labs[i] for i in keep]
+
+    return {'sentences': sents, 'labels': labs}
+
+def get_CT_dataset(dataset_name, max_per_class = 500, seed = 0):
     if dataset_name == 'news_cluster':
-        eval_dataset = load_dataset('mteb/twentynewsgroups-clustering', split= 'test')
-        return eval_dataset[9]
+        return load_clustering('mteb/twentynewsgroups-clustering', split='test', is_dup=False,
+                    max_per_class=max_per_class, seed=seed)
+    if dataset_name == 'reddit':
+        return load_clustering('mteb/reddit-clustering', split='test', is_dup=False,
+                    max_per_class=max_per_class, seed=seed)
+    if dataset_name == 'biorxiv':
+        return load_clustering('mteb/biorxiv-clustering-s2s', split='test', is_dup=False,
+                    max_per_class=max_per_class, seed=seed)
+    if dataset_name == 'stack':
+        return load_clustering('mteb/stackexchange-clustering', split='test', is_dup=False,
+                    max_per_class=max_per_class, seed=seed)
 
 # ---------------------------------------------------------------------------
 # Train/test preparation
@@ -263,7 +312,7 @@ STS_BENCHMARKS = ['STS-B', 'STS12', 'STS13', 'STS14', 'STS15', 'STS16', 'SICK-R'
 STS_VALID_NAME = STS_BENCHMARKS + ['STS17', 'BIOSSES', 'SemRel']
 SENTENCE_PAIR_VALID_NAME = ['QQP', 'MRPC', 'snli', 'multi_nli', 'RTE']
 CLASSIFICATION_VALID_NAME = ['MR', 'CR', 'subj', 'sms_spam']
-CLUSTERING_VALID_NAME = ['news_cluster']
+CLUSTERING_VALID_NAME = ['news_cluster', 'reddit', 'biorxiv', 'stack']
 
 def STS_train_test_split(dataset_name, split=0.3, seed=42):
     '''
