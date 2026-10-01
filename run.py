@@ -20,6 +20,9 @@ huggingface_hub.utils.logging.set_verbosity_error()
 logging.set_verbosity_error()
 logging.disable_progress_bar()
 warnings.filterwarnings("ignore", category = FutureWarning)
+warnings.filterwarnings("ignore", message="n_jobs value")
+warnings.filterwarnings("ignore", message="Spectral initialisation failed")
+warnings.filterwarnings("error", category=RuntimeWarning)
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -93,7 +96,8 @@ def rescale_dataset_labels(train_dataset, target_mean, target_variance, eps=1e-8
 def to_named(results, names, metrics, skip=()):
     named = {n: {m: r[m] for m in metrics if m not in skip} for n, r in zip(names, results)}
     kept = [m for m in metrics if m not in skip]
-    named['Average'] = {m: float(np.mean([named[n][m] for n in names])) for m in kept}
+    if names:
+        named['Average'] = {m: float(np.mean([named[n][m] for n in names])) for m in kept}
     return named
 
 def aggregate_runs(all_runs, group):

@@ -618,7 +618,7 @@ class TrainerSE:
 
         pred = MiniBatchKMeans(n_clusters=k, batch_size=500, n_init="auto",
                               random_state=seed).fit_predict(X)
-
+        plot_clusters(embeddings, labels, pred, self.model_id, self.pooling, self.loss_name, self.train_dataset_name, n_points=5000, seed=seed)
         return v_measure_score(y, pred), normalized_mutual_info_score(y, pred), adjusted_rand_score(y, pred)
 
 
@@ -647,7 +647,7 @@ class TrainerSE:
         results.append(v_measure)
         results.append(nmi)
         results.append(ari)
-        plot_clusters(data_embeddings1, data_labels, self.model_id, self.pooling, self.loss_name, self.train_dataset_name, n_points=5000, seed=0)
+        
         return results
 
     def evaluate_all_ct(self, test_datasets):
