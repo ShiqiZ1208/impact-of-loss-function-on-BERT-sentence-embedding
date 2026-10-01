@@ -112,29 +112,24 @@ def plot_isoscore(n_comp=100, path="./Anistropy/chart/all.npz", out_dir="./Anist
     plt.close()
 
 
-def plot_clusters(embeddings, labels, model_id, pooling, loss_name, train_name,
-                  dataset_name = 'news clustering', n_points=5000, seed=0):
+def plot_clusters(embeddings, labels, pred, model_id, pooling, loss_name, train_name,
+                  dataset_name = 'news clustering', n_points=5000, seed=None):
     # output folder, e.g. cluster/bert-base-uncased_use_mean/Batch_JS_div_on_STS-B
     directory = f"cluster/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
     os.makedirs(directory, exist_ok=True)
 
     # L2-normalize so distances behave like cosine distance
     X = np.asarray(embeddings, dtype=np.float32)
-    X = X / np.linalg.norm(X, axis=1, keepdims=True)
+    X = X / np.maximum(np.linalg.norm(X, axis=1, keepdims=True), 1e-12)
     y = np.asarray(labels)
 
     # subsample so the plot stays readable and UMAP stays fast
     rng = np.random.default_rng(seed)
     idx = rng.choice(len(X), size=min(n_points, len(X)), replace=False)
-    X, y = X[idx], y[idx]
-
-    # k-means with k = number of true classes
-    k = len(np.unique(y))
-    pred = MiniBatchKMeans(n_clusters=k, batch_size=32, n_init="auto",
-                           random_state=seed).fit_predict(X)
+    X, y, pred = X[idx], y[idx], np.asarray(pred)[idx]
 
     # 2D projection for plotting
-    Z = umap.UMAP(n_components=2, metric="cosine", random_state=seed).fit_transform(X)
+    Z = umap.UMAP(n_components=2, metric="cosine", init = "pca", random_state=seed).fit_transform(X)
 
     # one graph: each color = one k-means cluster
     plt.figure(figsize=(8, 7))
