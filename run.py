@@ -212,7 +212,8 @@ def run(config, seeds, is_seed):
 
       np.save(f'{output_dir}/{model_id.replace("/", "_")}_{loss_name}_{dataset}_runs.npy',
                   np.array(all_runs, dtype=object))   # raw per-run numbers
-
+  out_dir = './run_results'
+  os.makedirs(out_dir, exist_ok=True)
   np.save('./run_results/bert_sts_results.npy', np.array(all_summaries, dtype=object))   # mean ± std for every loss
 
 if __name__ == "__main__":
