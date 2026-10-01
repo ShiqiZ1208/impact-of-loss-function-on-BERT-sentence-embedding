@@ -616,7 +616,7 @@ class TrainerSE:
         y = np.asarray(labels)
         k = len(np.unique(y))
 
-        pred = MiniBatchKMeans(n_clusters=k, batch_size=32, n_init="auto",
+        pred = MiniBatchKMeans(n_clusters=k, batch_size=500, n_init="auto",
                               random_state=seed).fit_predict(X)
 
         return v_measure_score(y, pred), normalized_mutual_info_score(y, pred), adjusted_rand_score(y, pred)
