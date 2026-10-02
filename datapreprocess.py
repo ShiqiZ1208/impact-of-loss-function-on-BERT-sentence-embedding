@@ -4,7 +4,7 @@ import pandas as pd
 from datasets import load_dataset, Dataset
 from datasets import Value
 from datasets import concatenate_datasets
-from collections import defaultdict
+from collections import defaultdict, Counter
 import random
  
  
@@ -251,7 +251,7 @@ def get_CL_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=
         return rename_columns(val_dataset, type = 'sms_spam'), rename_columns(eval_dataset, type = 'sms_spam')
 
 def load_clustering(hf_name, split='test', is_dup=False,
-                    max_per_class=200, seed=0):                  # NEW: two arguments
+                    max_per_class=400, max_classes=30, seed=0):                  # NEW: two arguments
     ds = load_dataset(hf_name, split=split)
 
     # 1. merge all rows (handles both nested and flat formats)
@@ -268,6 +268,13 @@ def load_clustering(hf_name, split='test', is_dup=False,
         for s, l in zip(sentences, labels):
             if s not in seen:
                 seen.add(s); sents.append(s); labs.append(l)
+
+    if max_classes is not None:
+        counts = Counter(map(str, labs))
+        top = {c for c, _ in sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:max_classes]}
+        keep = [i for i, l in enumerate(labs) if str(l) in top]
+        sents = [sents[i] for i in keep]
+        labs  = [labs[i] for i in keep]
 
     # 3. relabel: any label type (str or int) → 0..K-1
     classes = sorted(set(map(str, labs)))

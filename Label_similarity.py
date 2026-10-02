@@ -137,7 +137,7 @@ def plot_clusters(embeddings, labels, pred, model_id, pooling, loss_name, train_
     for c in np.unique(pred):
         mask = pred == c
         plt.scatter(Z[mask, 0], Z[mask, 1], s=3, alpha=0.7,
-                    color=cmap(c % 20), label=str(c + 1))   # clusters shown as 1..k
+                    color=cmap(c % 30), label=str(c + 1))   # clusters shown as 1..k
 
     plt.legend(title="Cluster", bbox_to_anchor=(1.02, 1), loc="upper left",
                fontsize=8, markerscale=4)
