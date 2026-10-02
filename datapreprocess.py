@@ -251,7 +251,7 @@ def get_CL_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=
         return rename_columns(val_dataset, type = 'sms_spam'), rename_columns(eval_dataset, type = 'sms_spam')
 
 def load_clustering(hf_name, split='test', is_dup=False,
-                    max_per_class=400, max_classes=30, seed=0):                  # NEW: two arguments
+                    max_per_class=400, max_classes=None, seed=0):                  # NEW: two arguments
     ds = load_dataset(hf_name, split=split)
 
     # 1. merge all rows (handles both nested and flat formats)
