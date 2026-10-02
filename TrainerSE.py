@@ -9,9 +9,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from scipy.stats import spearmanr, pearsonr
 from torch.optim import AdamW
-from datapreprocess import STSDataset, TripDataset, CLDataset
+from datapreprocess import STSDataset, TripDataset, CLDataset, RTDataset
 from IsoScore.IsoScore import IsoScore
-from Label_similarity import generate_random_pair_distribution, generate_distribution, plot_clusters
+from Label_similarity import generate_random_pair_distribution, generate_distribution, plot_clusters, plot_confusion, plot_SP_threshold
 from sklearn.metrics import f1_score, accuracy_score
 from sklearn.linear_model import LogisticRegressionCV
 from sklearn.preprocessing import StandardScaler
@@ -24,7 +24,7 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 class TrainerSE:
-    def __init__(self, model, device, tokenizer, model_id, loss_n, dataset_n, evaluate_metric, evaluation_sp_metric, evaluation_cl_metric, evaluation_ct_metric, lrate = 5e-5, pooling = "cls", is_seed = False, is_graph = False):
+    def __init__(self, model, device, tokenizer, model_id, loss_n, dataset_n, evaluate_metric, evaluation_sp_metric, evaluation_cl_metric, evaluation_ct_metric, evaluation_rt_metric, lrate = 5e-5, pooling = "cls", is_seed = False, is_graph = False):
         #print(lrate)
         self.is_seed = is_seed
         self.model = model
@@ -40,6 +40,7 @@ class TrainerSE:
         self.evaluate_sp_metric = evaluation_sp_metric
         self.evaluate_cl_metric = evaluation_cl_metric
         self.evaluate_ct_metric = evaluation_ct_metric
+        self.evaluate_rt_metric = evaluation_rt_metric
         self.is_graph = is_graph
 
 
@@ -464,7 +465,7 @@ class TrainerSE:
 
         return correct / total
 
-    def evaluate_sp(self, val_dataset, test_dataset):
+    def evaluate_sp(self, val_dataset, test_dataset, test_name):
         self.model.eval()
         #print(val_dataset)
         test_dataloader = DataLoader(STSDataset(test_dataset['sentence1'], test_dataset['sentence2'], test_dataset['labels']), batch_size=90)
@@ -536,12 +537,16 @@ class TrainerSE:
         results.append(acc)
         results.append(f1_threhold)
         results.append(acc_threshold)
+        if self.is_graph:
+            plot_SP_threshold(cosine_similarities, data_labels, f1_threhold,
+                              self.model_id, self.pooling, self.loss_name,
+                              self.train_dataset_name, test_name)
         return results
         
     def evaluate_all_sp(self, val_dataset, test_datasets):
         evaluation_result = []
         for name, test_dataset in test_datasets.items():
-            results = self.evaluate_sp(val_dataset[name], test_dataset)
+            results = self.evaluate_sp(val_dataset[name], test_dataset, name)
             result_set = {}
             for i, metric in enumerate(self.evaluate_sp_metric):
                 result_set[metric] = results[i]
@@ -550,16 +555,19 @@ class TrainerSE:
 
 
 
-    def evaluate_sc(self, train_embedding, train_label, test_embedding, test_label):
+    def evaluate_sc(self, train_embedding, train_label, test_embedding, test_label, test_name):
 
         scaler = StandardScaler().fit(train_embedding)
         clf = LogisticRegressionCV(Cs=[0.01, 0.1, 1, 10, 100], cv=5, max_iter=2000)
         clf.fit(scaler.transform(train_embedding), train_label)
 
         pred = clf.predict(scaler.transform(test_embedding))
+        if self.is_graph:
+            plot_confusion(test_label, pred, self.model_id, self.pooling,
+                          self.loss_name, self.train_dataset_name, test_name)
         return [accuracy_score(test_label, pred), f1_score(test_label, pred, average="macro"), clf.C_[0]]
 
-    def evaluate_cl(self, val_dataset, test_dataset):
+    def evaluate_cl(self, val_dataset, test_dataset, test_name):
         self.model.eval()
         #print(val_dataset)
         test_dataloader = DataLoader(CLDataset(test_dataset['text'], test_dataset['labels']), batch_size=90)
@@ -594,7 +602,7 @@ class TrainerSE:
         data_embeddings1 = torch.cat(all_embeddings1)
         data_labels = torch.cat(all_labels)
         data_labels_np = data_labels.numpy()
-        acc_score, f1_score, _ = self.evaluate_sc(val_embeddings1, val_labels, data_embeddings1, data_labels)
+        acc_score, f1_score, _ = self.evaluate_sc(val_embeddings1, val_labels, data_embeddings1, data_labels, test_name)
         results = []
         results.append(acc_score)
         results.append(f1_score)
@@ -603,7 +611,7 @@ class TrainerSE:
     def evaluate_all_cl(self, val_dataset, test_datasets):
         evaluation_result = []
         for name, test_dataset in test_datasets.items():
-            results = self.evaluate_cl(val_dataset[name], test_dataset)
+            results = self.evaluate_cl(val_dataset[name], test_dataset, name)
             result_set = {}
             for i, metric in enumerate(self.evaluate_cl_metric):
                 result_set[metric] = results[i]
@@ -618,7 +626,8 @@ class TrainerSE:
 
         pred = MiniBatchKMeans(n_clusters=k, batch_size=500, n_init="auto",
                               random_state=seed).fit_predict(X)
-        plot_clusters(embeddings, labels, pred, self.model_id, self.pooling, self.loss_name, self.train_dataset_name, test_name, n_points=5000, seed=seed)
+        if self.is_graph:
+            plot_clusters(embeddings, labels, pred, self.model_id, self.pooling, self.loss_name, self.train_dataset_name, test_name, n_points=5000, seed=seed)
         return v_measure_score(y, pred), normalized_mutual_info_score(y, pred), adjusted_rand_score(y, pred)
 
 
@@ -656,6 +665,65 @@ class TrainerSE:
             results = self.evaluate_ct(test_dataset, name)
             result_set = {}
             for i, metric in enumerate(self.evaluate_ct_metric):
+                result_set[metric] = results[i]
+            evaluation_result.append(result_set)
+        return evaluation_result
+
+    def ndcg_at_k(self, ranked_doc_ids, rel_dict, k=10):
+        dcg = sum(rel_dict.get(d, 0) / np.log2(i + 2) for i, d in enumerate(ranked_doc_ids[:k]))
+        ideal = sorted(rel_dict.values(), reverse=True)[:k]
+        idcg = sum(r / np.log2(i + 2) for i, r in enumerate(ideal))
+        return dcg / idcg if idcg > 0 else 0.0
+
+    def calculate_retrieval_metrics(self, Q, D, q_ids, doc_ids, rel, k=10, top_n=100):
+
+        ndcgs, recalls = [], []
+        for start in range(0, len(Q), 256):                 # chunks to save memory
+            S = Q[start:start + 256] @ D.T                   # cosine similarity
+            top = np.argsort(-S, axis=1)[:, :top_n]
+            for qi, row in enumerate(top):
+                relevant = rel[q_ids[start + qi]]
+                ranked = [doc_ids[j] for j in row]
+                ndcgs.append(self.ndcg_at_k(ranked, relevant, k=k))
+                recalls.append(len(set(ranked) & set(relevant)) / len(relevant))
+        return float(np.mean(ndcgs)), float(np.mean(recalls))
+
+    def evaluate_rt(self, test_dataset, test_name):
+        self.model.eval()
+        doc_dataloader   = DataLoader(RTDataset(test_dataset['doc_texts']), batch_size=90, shuffle=False)
+        query_dataloader = DataLoader(RTDataset(test_dataset['q_texts']),   batch_size=90, shuffle=False)
+        all_doc = []
+        all_query = []
+
+        with torch.no_grad():
+            for sentences in tqdm(doc_dataloader, disable=False, desc="Extracting Doc", leave=False):
+                #for every pair extract the embedding and labels append to the empty list created
+                doc_embeddings = self.extract_embeddings(self.model, self.tokenizer, sentences, self.device)
+                all_doc.append(doc_embeddings.cpu())
+            
+            for sentences in tqdm(query_dataloader, disable=False, desc="Extracting query", leave=False):
+                #for every pair extract the embedding and labels append to the empty list created
+                query_embeddings = self.extract_embeddings(self.model, self.tokenizer, sentences, self.device)
+                all_query.append(query_embeddings.cpu())
+
+
+        D = torch.cat(all_doc).numpy()
+        Q = torch.cat(all_query).numpy()
+        D = D / np.maximum(np.linalg.norm(D, axis=1, keepdims=True), 1e-12)
+        Q = Q / np.maximum(np.linalg.norm(Q, axis=1, keepdims=True), 1e-12)
+        ndcg, recall = self.calculate_retrieval_metrics(
+            Q, D, test_dataset['q_ids'], test_dataset['doc_ids'], test_dataset['rel'])
+        results = []
+        results.append(ndcg)
+        results.append(recall)
+        return results
+
+    def evaluate_all_rt(self, test_datasets):
+        evaluation_result = []
+        for name, test_dataset in test_datasets.items():
+            results = self.evaluate_rt(test_dataset, name)
+            result_set = {}
+            for i, metric in enumerate(self.evaluate_rt_metric):
                 result_set[metric] = results[i]
             evaluation_result.append(result_set)
         return evaluation_result

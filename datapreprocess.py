@@ -297,7 +297,7 @@ def load_clustering(hf_name, split='test', is_dup=False,
 
     return {'sentences': sents, 'labels': labs}
 
-def get_CT_dataset(dataset_name, max_per_class = 500, seed = 0):
+def get_CT_dataset(dataset_name, max_per_class = 500, seed = None):
     if dataset_name == 'news_cluster':
         return load_clustering('mteb/twentynewsgroups-clustering', split='test', is_dup=False,
                     max_per_class=max_per_class, seed=seed)
@@ -311,6 +311,55 @@ def get_CT_dataset(dataset_name, max_per_class = 500, seed = 0):
         return load_clustering('mteb/stackexchange-clustering', split='test', is_dup=False,
                     max_per_class=max_per_class, seed=seed)
 
+def get_RT_dataset(dataset_name, seed = None):
+    if dataset_name == 'scifact':
+        corpus  = load_dataset('BeIR/scifact', "corpus",  split="corpus")
+        queries = load_dataset('BeIR/scifact', "queries", split="queries")
+        qrels   = load_dataset('BeIR/scifact-qrels', split="test")
+        rel = defaultdict(dict)
+        for r in qrels:
+            if r["score"] > 0:
+                rel[str(r["query-id"])][str(r["corpus-id"])] = r["score"]
+
+        doc_ids   = [str(d) for d in corpus["_id"]]
+        doc_texts = [(t + " " + x).strip() for t, x in zip(corpus["title"], corpus["text"])]
+        q_pairs   = [(str(q), t) for q, t in zip(queries["_id"], queries["text"]) if str(q) in rel]
+
+        return {"doc_ids": doc_ids, "doc_texts": doc_texts,
+                "q_ids": [q for q, _ in q_pairs], "q_texts": [t for _, t in q_pairs],
+                "rel": rel}
+    if dataset_name == 'nfcorpus':
+        corpus  = load_dataset('BeIR/nfcorpus', "corpus",  split="corpus")
+        queries = load_dataset('BeIR/nfcorpus', "queries", split="queries")
+        qrels   = load_dataset('BeIR/nfcorpus-qrels', split="test")
+        rel = defaultdict(dict)
+        for r in qrels:
+            if r["score"] > 0:
+                rel[str(r["query-id"])][str(r["corpus-id"])] = r["score"]
+
+        doc_ids   = [str(d) for d in corpus["_id"]]
+        doc_texts = [(t + " " + x).strip() for t, x in zip(corpus["title"], corpus["text"])]
+        q_pairs   = [(str(q), t) for q, t in zip(queries["_id"], queries["text"]) if str(q) in rel]
+
+        return {"doc_ids": doc_ids, "doc_texts": doc_texts,
+                "q_ids": [q for q, _ in q_pairs], "q_texts": [t for _, t in q_pairs],
+                "rel": rel}
+    if dataset_name == 'arguana':
+        corpus  = load_dataset('BeIR/arguana', "corpus",  split="corpus")
+        queries = load_dataset('BeIR/arguana', "queries", split="queries")
+        qrels   = load_dataset('BeIR/arguana-qrels', split="test")
+        rel = defaultdict(dict)
+        for r in qrels:
+            if r["score"] > 0:
+                rel[str(r["query-id"])][str(r["corpus-id"])] = r["score"]
+
+        doc_ids   = [str(d) for d in corpus["_id"]]
+        doc_texts = [(t + " " + x).strip() for t, x in zip(corpus["title"], corpus["text"])]
+        q_pairs   = [(str(q), t) for q, t in zip(queries["_id"], queries["text"]) if str(q) in rel]
+
+        return {"doc_ids": doc_ids, "doc_texts": doc_texts,
+                "q_ids": [q for q, _ in q_pairs], "q_texts": [t for _, t in q_pairs],
+                "rel": rel}
 # ---------------------------------------------------------------------------
 # Train/test preparation
 # ---------------------------------------------------------------------------
@@ -320,6 +369,7 @@ STS_VALID_NAME = STS_BENCHMARKS + ['STS17', 'BIOSSES', 'SemRel']
 SENTENCE_PAIR_VALID_NAME = ['QQP', 'MRPC', 'snli', 'multi_nli', 'RTE']
 CLASSIFICATION_VALID_NAME = ['MR', 'CR', 'subj', 'sms_spam']
 CLUSTERING_VALID_NAME = ['news_cluster', 'reddit', 'biorxiv', 'stack']
+RETRIEVAL_VALID_NAME = ['scifact', 'nfcorpus', 'arguana']
 
 def STS_train_test_split(dataset_name, split=0.3, seed=42):
     '''
@@ -387,7 +437,13 @@ def prepare_CT_eval_datasets(names = ['news_cluster']):
             raise ValueError(f"Unknown Sentence pair eval dataset: {n}. Choose from {CLUSTERING_VALID_NAME}")
     return {n: get_CT_dataset(n) for n in names}
 
- 
+def prepare_RT_eval_datasets(names = ['scifact']):
+    for n in names:
+        if n not in RETRIEVAL_VALID_NAME:
+            raise ValueError(f"Unknown Sentence pair eval dataset: {n}. Choose from {CLUSTERING_VALID_NAME}")
+    return {n: get_RT_dataset(n) for n in names}
+
+
 class STSDataset(torch.utils.data.Dataset):
     '''
     A class for STSDataset.
@@ -436,4 +492,18 @@ class CLDataset(torch.utils.data.Dataset):
  
     def __getitem__(self, idx):
         return self.text[idx], self.label[idx]
+
+class RTDataset(torch.utils.data.Dataset):
+    '''
+    A class for retrieval texts (queries or documents).
+    Returns only the text; relevance labels are handled separately via qrels.
+    '''
+    def __init__(self, text):
+        self.text = text
+
+    def __len__(self):
+        return len(self.text)
+
+    def __getitem__(self, idx):
+        return self.text[idx]
 

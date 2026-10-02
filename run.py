@@ -4,7 +4,7 @@ import numpy as np
 from transformers import logging
 import random
 from TrainerSE import TrainerSE
-from datapreprocess import prepare_train_dataset, prepare_eval_datasets, prepare_SP_eval_datasets, prepare_CL_eval_datasets, prepare_CT_eval_datasets
+from datapreprocess import prepare_train_dataset, prepare_eval_datasets, prepare_SP_eval_datasets, prepare_CL_eval_datasets, prepare_CT_eval_datasets, prepare_RT_eval_datasets
 from transformers import AutoModel, AutoTokenizer
 import yaml
 import torch, datasets
@@ -129,10 +129,12 @@ def run(config, seeds, is_seed):
   eval_sp_datasets_name = config['test_sp_name']
   eval_cl_datasets_name = config['test_cl_name']
   eval_ct_datasets_name = config['test_ct_name']
+  eval_rt_datasets_name = config['test_rt_name']
   evaluation_metric = config['evaluation_metric']
   evaluation_sp_metric = config['evaluation_metric_sp']
   evaluation_cl_metric = config['evaluation_metric_cl']
   evaluation_ct_metric = config['evaluation_metric_ct']
+  evaluation_rt_metric = config['evaluation_metric_rt']
   print(f'train on {train_dataset_name}\n test:{eval_sts_datasets_name}\n test:{eval_sp_datasets_name}\n test:{eval_cl_datasets_name}\n test:{eval_ct_datasets_name}\n metric:{evaluation_metric}')
   output_dir = f'results/{model_id}'
   os.makedirs(output_dir, exist_ok=True)
@@ -162,12 +164,13 @@ def run(config, seeds, is_seed):
           cl_test_datasets = {n: test for n, (val, test) in cl_datasets.items()}
 
           ct_test_datasets = prepare_CT_eval_datasets(eval_ct_datasets_name)
+          rt_test_datasets = prepare_RT_eval_datasets(eval_rt_datasets_name)
           all_runs = [] 
           for runs in range(config['total_runs']):
             if is_seed == True:
               set_seed(seeds[runs])
             model, tokenizer = get_model_tokenizer(model_id)
-            trainer = TrainerSE(model, device, tokenizer, model_id, loss_name, dataset, evaluation_metric, evaluation_sp_metric, evaluation_cl_metric, evaluation_ct_metric, lrate, mode, is_seed, is_graph)
+            trainer = TrainerSE(model, device, tokenizer, model_id, loss_name, dataset, evaluation_metric, evaluation_sp_metric, evaluation_cl_metric, evaluation_ct_metric, evaluation_rt_metric, lrate, mode, is_seed, is_graph)
                   
             if loss_name == 'mean_adjust_MSE':
                     mean, variance = trainer.cal_mean_variance(train_dataset, batch_size, seed=seeds[runs])
@@ -196,6 +199,12 @@ def run(config, seeds, is_seed):
                 print(f' evaluate on dataset {name}: ', end='  ')
                 for metric in evaluation_ct_metric:
                     print(f'{metric}: {CT_result[i][metric]:.4f}', end='  ')
+                print()
+            RT_result = trainer.evaluate_all_rt(rt_test_datasets)
+            for i, name in enumerate(rt_test_datasets):
+                print(f' evaluate on dataset {name}: ', end='  ')
+                for metric in evaluation_rt_metric:
+                    print(f'{metric}: {RT_result[i][metric]:.4f}', end='  ')
                 print()
 
             all_runs.append({

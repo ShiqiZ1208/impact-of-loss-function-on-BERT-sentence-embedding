@@ -7,6 +7,7 @@ import os
 import umap
 import seaborn as sns
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.metrics import ConfusionMatrixDisplay
 
 def to_np(x):
     if torch.is_tensor(x):
@@ -132,15 +133,26 @@ def plot_clusters(embeddings, labels, pred, model_id, pooling, loss_name, train_
     Z = umap.UMAP(n_components=2, metric="cosine", init = "pca", random_state=seed).fit_transform(X)
 
     # one graph: each color = one k-means cluster
+    colors = list(plt.get_cmap("tab10").colors)
+
+    # pick the 5 largest k-means clusters
+    ids, counts = np.unique(pred, return_counts=True)
+    order = np.lexsort((ids, -counts))
+    show = ids[np.argsort(-counts)[:5]]
+
     plt.figure(figsize=(8, 7))
-    cmap = plt.get_cmap("tab20")
-    for c in np.unique(pred):
+    # background: all other points in light gray
+    rest = ~np.isin(pred, show)
+    plt.scatter(Z[rest, 0], Z[rest, 1], s=2, color="lightgray", alpha=0.4)
+
+    # foreground: the 5 selected clusters
+    for i, c in enumerate(show):
         mask = pred == c
-        plt.scatter(Z[mask, 0], Z[mask, 1], s=3, alpha=0.7,
-                    color=cmap(c % 30), label=str(c + 1))   # clusters shown as 1..k
+        plt.scatter(Z[mask, 0], Z[mask, 1], s=3, alpha=0.8,
+                    color=colors[i], label=str(c + 1))
 
     plt.legend(title="Cluster", bbox_to_anchor=(1.02, 1), loc="upper left",
-               fontsize=8, markerscale=4)
+               fontsize=8, markerscale=4, ncol=2 if len(np.unique(pred)) > 25 else 1)
     plt.title(f"{test_name}: K-means clusters ({loss_name}, {model_id})")
     plt.xticks([]); plt.yticks([])
     plt.tight_layout()
@@ -148,5 +160,51 @@ def plot_clusters(embeddings, labels, pred, model_id, pooling, loss_name, train_
     save_path = os.path.join(directory, f"{test_name}_clusters.png")
     plt.savefig(save_path, dpi=200, bbox_inches="tight")
     #print(f"Saved cluster plot: {save_path}")
+    plt.close()
+
+def plot_SP_threshold(test_sims, test_labels, thr, model_id, pooling, loss_name,
+                      train_name, test_name):
+    directory = f"sentence_pair/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
+    os.makedirs(directory, exist_ok=True)
+
+    sims = np.asarray(test_sims, dtype=float)
+    labels = np.asarray(test_labels).astype(int)
+
+    plt.figure(figsize=(7, 4.5))
+    bins = np.linspace(0, 1, 201)
+    lo, hi = sims.min(), sims.max()
+    pad = 0.05 * (hi - lo)
+    pos, neg = sims[labels == 1], sims[labels == 0]
+
+    sns.histplot(pos, bins=bins, stat="density", color="#1baf7a", alpha=0.2, edgecolor=None)
+    sns.histplot(neg, bins=bins, stat="density", color="#eb6834", alpha=0.2, edgecolor=None)
+    sns.kdeplot(x=pos, fill=False, linewidth=2, color="#1baf7a",
+                bw_adjust=0.5, clip=(-1, 1), label="positive")
+    sns.kdeplot(x=neg, fill=False, linewidth=2, color="#eb6834",
+                bw_adjust=0.5, clip=(-1, 1), label="negative")
+
+    plt.axvline(thr, color="k", linestyle="--", label=f"τ = {thr:.2f} (from dev)")
+    plt.xlim(max(-1, lo - pad), min(1, hi + pad))
+    plt.xlabel("cosine similarity"); plt.ylabel("density")
+    plt.title(f"{test_name}: {loss_name} ({model_id})")
+    plt.legend()
+    save_path = os.path.join(directory, f"{test_name}_SP_threshold.png")
+    plt.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+def plot_confusion(y_true, y_pred, model_id, pooling, loss_name, train_name,
+                   test_name, class_names=None):
+    directory = f"classification/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
+    os.makedirs(directory, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ConfusionMatrixDisplay.from_predictions(
+        y_true, y_pred, normalize="true", display_labels=class_names,
+        cmap="Blues", values_format=".2f", colorbar=False, ax=ax)
+    ax.set_title(f"{test_name}: {loss_name} ({model_id})")
+    plt.xticks(rotation=45, ha="right")
+
+    save_path = os.path.join(directory, f"{test_name}_confusion.png")
+    plt.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close()
 
