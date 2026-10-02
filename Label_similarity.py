@@ -113,7 +113,7 @@ def plot_isoscore(n_comp=100, path="./Anistropy/chart/all.npz", out_dir="./Anist
 
 
 def plot_clusters(embeddings, labels, pred, model_id, pooling, loss_name, train_name,
-                  dataset_name = 'news clustering', n_points=5000, seed=None):
+                  test_name, n_points=5000, seed=None):
     # output folder, e.g. cluster/bert-base-uncased_use_mean/Batch_JS_div_on_STS-B
     directory = f"cluster/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
     os.makedirs(directory, exist_ok=True)
@@ -141,11 +141,11 @@ def plot_clusters(embeddings, labels, pred, model_id, pooling, loss_name, train_
 
     plt.legend(title="Cluster", bbox_to_anchor=(1.02, 1), loc="upper left",
                fontsize=8, markerscale=4)
-    plt.title(f"{dataset_name}: K-means clusters ({loss_name}, {model_id})")
+    plt.title(f"{test_name}: K-means clusters ({loss_name}, {model_id})")
     plt.xticks([]); plt.yticks([])
     plt.tight_layout()
 
-    save_path = os.path.join(directory, f"{dataset_name}_clusters.png")
+    save_path = os.path.join(directory, f"{test_name}_clusters.png")
     plt.savefig(save_path, dpi=200, bbox_inches="tight")
     #print(f"Saved cluster plot: {save_path}")
     plt.close()

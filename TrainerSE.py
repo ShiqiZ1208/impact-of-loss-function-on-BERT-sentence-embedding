@@ -610,7 +610,7 @@ class TrainerSE:
             evaluation_result.append(result_set)
         return evaluation_result
 
-    def evaluate_clustering(self, embeddings, labels, seed=0):
+    def evaluate_clustering(self, embeddings, labels, test_name, seed=0):
         X = np.asarray(embeddings, dtype=np.float32)
         X = X / np.linalg.norm(X, axis=1, keepdims=True)
         y = np.asarray(labels)
@@ -618,11 +618,11 @@ class TrainerSE:
 
         pred = MiniBatchKMeans(n_clusters=k, batch_size=500, n_init="auto",
                               random_state=seed).fit_predict(X)
-        plot_clusters(embeddings, labels, pred, self.model_id, self.pooling, self.loss_name, self.train_dataset_name, n_points=5000, seed=seed)
+        plot_clusters(embeddings, labels, pred, self.model_id, self.pooling, self.loss_name, self.train_dataset_name, test_name, n_points=5000, seed=seed)
         return v_measure_score(y, pred), normalized_mutual_info_score(y, pred), adjusted_rand_score(y, pred)
 
 
-    def evaluate_ct(self, test_dataset):
+    def evaluate_ct(self, test_dataset, test_name):
         self.model.eval()
         #print(val_dataset)
         test_dataloader = DataLoader(CLDataset(test_dataset['sentences'], test_dataset['labels']), batch_size=90)
@@ -642,7 +642,7 @@ class TrainerSE:
         data_embeddings1 = torch.cat(all_embeddings1)
         data_labels = torch.cat(all_labels)
         data_labels_np = data_labels.numpy()
-        v_measure, nmi, ari = self.evaluate_clustering(data_embeddings1, data_labels, seed=0)
+        v_measure, nmi, ari = self.evaluate_clustering(data_embeddings1, data_labels, test_name, seed=0)
         results = []
         results.append(v_measure)
         results.append(nmi)
@@ -653,7 +653,7 @@ class TrainerSE:
     def evaluate_all_ct(self, test_datasets):
         evaluation_result = []
         for name, test_dataset in test_datasets.items():
-            results = self.evaluate_ct(test_dataset)
+            results = self.evaluate_ct(test_dataset, name)
             result_set = {}
             for i, metric in enumerate(self.evaluate_ct_metric):
                 result_set[metric] = results[i]
