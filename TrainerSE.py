@@ -678,12 +678,13 @@ class TrainerSE:
     def calculate_retrieval_metrics(self, Q, D, q_ids, doc_ids, rel, k=10, top_n=100):
 
         ndcgs, recalls = [], []
-        for start in range(0, len(Q), 256):                 # chunks to save memory
-            S = Q[start:start + 256] @ D.T                   # cosine similarity
-            top = np.argsort(-S, axis=1)[:, :top_n]
+        for start in range(0, len(Q), 256):
+            S = Q[start:start + 256] @ D.T
+            top = np.argsort(-S, axis=1)[:, :top_n + 1]
             for qi, row in enumerate(top):
-                relevant = rel[q_ids[start + qi]]
-                ranked = [doc_ids[j] for j in row]
+                q = q_ids[start + qi]
+                relevant = rel[q]
+                ranked = [doc_ids[j] for j in row if doc_ids[j] != q][:top_n]   
                 ndcgs.append(self.ndcg_at_k(ranked, relevant, k=k))
                 recalls.append(len(set(ranked) & set(relevant)) / len(relevant))
         return float(np.mean(ndcgs)), float(np.mean(recalls))

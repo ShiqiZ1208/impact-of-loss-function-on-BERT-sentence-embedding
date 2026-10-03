@@ -118,7 +118,8 @@ def print_aggregate(agg, title):
             print(f'{m}: {mean:.4f} ± {std:.4f}', end='  ')
         print()
 
-def run(config, seeds, is_seed):
+
+def run(config, seeds, is_seed, verbose=False):
   lrate = config['learning_rate']
   batch_size = config['batch_size']
   epochs = config['num_epochs']
@@ -169,6 +170,7 @@ def run(config, seeds, is_seed):
           for runs in range(config['total_runs']):
             if is_seed == True:
               set_seed(seeds[runs])
+            print(f"runs: {runs}\n")
             model, tokenizer = get_model_tokenizer(model_id)
             trainer = TrainerSE(model, device, tokenizer, model_id, loss_name, dataset, evaluation_metric, evaluation_sp_metric, evaluation_cl_metric, evaluation_ct_metric, evaluation_rt_metric, lrate, mode, is_seed, is_graph)
                   
@@ -213,12 +215,13 @@ def run(config, seeds, is_seed):
                                 skip=('f1_threshold', 'ac_threshold')),
                 'CL':  to_named(CL_result, list(cl_test_datasets), evaluation_cl_metric),
                 'CT':  to_named(CT_result, list(ct_test_datasets), evaluation_ct_metric),
+                'RT':  to_named(RT_result, list(rt_test_datasets), evaluation_rt_metric),
             })
   
       key = f'{loss_name}|{dataset}'
       all_summaries[key] = {}
       print(f'\n########## {loss_name} on {dataset}: {len(all_runs)} runs ##########')
-      for group in ('STS', 'SP', 'CL', 'CT'):
+      for group in ('STS', 'SP', 'CL', 'CT', 'RT'):
           agg = aggregate_runs(all_runs, group)
           print_aggregate(agg, group)
           all_summaries[key][group] = agg
