@@ -31,10 +31,12 @@ def select_columns(example):
  
 def rename_columns(dataset, type = 'nli'):
     '''
-    Renames raw NLI columns (premise/hypothesis/label) to the STS-style
-    sentence1/sentence2/labels, filters to entailment (0) and contradiction (2)
-    only (drops neutral), and remaps entailment/contradiction to binary
-    similar/dissimilar labels (1/0).
+    Standardize dataset column names via 'rename':
+      - STS and SP tasks: rename columns to 'sentence1', 'sentence2', and 'labels'.
+      - CL tasks: rename columns to 'text' and 'labels'.
+
+    For SNLI and NLI datasets, labels are additionally binarized:
+    0 = negative, 1 = positive.
     '''
     if type == 'nli':
         # Rename to match the sentence1/sentence2 schema used by STS datasets
@@ -55,7 +57,7 @@ def rename_columns(dataset, type = 'nli'):
     # cast to float32 to match the label dtype used by STS datasets
     dataset = dataset.cast_column("labels", Value("float32"))
 
-    # Drop neutral (1): only entailment/contradiction give an unambiguous
+    # Drop neutral: only entailment/contradiction give an unambiguous
     # positive/negative pair, which is what contrastive training needs.
     # Follows the SimCSE paper's supervised NLI setup.
     if type == 'nli':
@@ -204,7 +206,14 @@ def get_sts_dataset(dataset_name, split='test', is_triplet=False):
     dataset = load_dataset(f'mteb/{hub_name}-sts', split='test')
     return dataset.rename_column('score', 'labels')
  
-def get_SP_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=False):
+def get_SP_dataset(dataset_name, val_size = 6000, test_size = 10000):
+    '''
+    Load a sentence-pair classification dataset.
+
+    Uses 'load_dataset' with the given dataset name to retrieve the
+    validation and test splits. The validation split is used to
+    determine the decision threshold for separating the classes.
+    '''
     if dataset_name == "snli":
         val_dataset = load_dataset('stanfordnlp/snli', split= f'validation[:{val_size}]')
         eval_dataset = load_dataset('stanfordnlp/snli', split= f'test[:{test_size}]')
@@ -231,7 +240,14 @@ def get_SP_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=
         return rename_columns(val_dataset, type = 'general'), rename_columns(eval_dataset, type = 'general')
          
 
-def get_CL_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=False):
+def get_CL_dataset(dataset_name, val_size = 6000, test_size = 10000):
+    '''
+    Load a single sentence classification dataset.
+
+    Uses 'load_dataset' with the given dataset name to retrieve the
+    validation and test splits. The validation split is used to
+    training the classification head for separating the classes.
+    '''
     if dataset_name == 'MR':
         val_dataset = load_dataset('cornell-movie-review-data/rotten_tomatoes', split= f'train[:{val_size}]')
         eval_dataset = load_dataset('cornell-movie-review-data/rotten_tomatoes', split= f'test[:{test_size}]')
@@ -253,6 +269,12 @@ def get_CL_dataset(dataset_name, val_size = 6000, test_size = 10000, is_triplet=
 def load_clustering(hf_name, split='test', is_dup=False,
                     max_per_class=400, max_classes=None, seed=0):                  # NEW: two arguments
     ds = load_dataset(hf_name, split=split)
+    '''
+    Load a clustering dataset.
+
+    Uses 'load_dataset' with the given dataset name to retrieve the
+    test split, which is later used to evaluate clustering performance.
+    '''
 
     # 1. merge all rows (handles both nested and flat formats)
     if isinstance(ds[0]['sentences'], list):
@@ -311,7 +333,13 @@ def get_CT_dataset(dataset_name, max_per_class = 500, seed = None):
         return load_clustering('mteb/stackexchange-clustering', split='test', is_dup=False,
                     max_per_class=max_per_class, seed=seed)
 
-def get_RT_dataset(dataset_name, seed = None):
+def get_RT_dataset(dataset_name):
+    '''
+    Load a retrieval dataset.
+
+    Uses 'load_dataset' with the given dataset name to retrieve the
+    test split, which is later used to evaluate retrieval performance.
+    '''
     if dataset_name == 'scifact':
         corpus  = load_dataset('BeIR/scifact', "corpus",  split="corpus")
         queries = load_dataset('BeIR/scifact', "queries", split="queries")
@@ -363,6 +391,8 @@ def get_RT_dataset(dataset_name, seed = None):
 # ---------------------------------------------------------------------------
 # Train/test preparation
 # ---------------------------------------------------------------------------
+
+# use a list for user input, give user warning if the dataset name is invalid
 NLI_KEYS = ("snli", "multi_nli", "nli")
 STS_BENCHMARKS = ['STS-B', 'STS12', 'STS13', 'STS14', 'STS15', 'STS16', 'SICK-R']
 STS_VALID_NAME = STS_BENCHMARKS + ['STS17', 'BIOSSES', 'SemRel']
@@ -480,8 +510,8 @@ class TripDataset(torch.utils.data.Dataset):
 
 class CLDataset(torch.utils.data.Dataset):
     '''
-    A class for STSDataset.
-    Has __len__ and __getitem__ for the training process.
+    A class for CLDataset.
+    Has __len__ and __getitem__ for the validation process.
     '''
     def __init__(self, text, label):
         self.label = label
