@@ -73,22 +73,52 @@ def kl_divergence(p, q, eps=1e-12):
 def js_divergence(p, q, eps=1e-12):
     m = 0.5 * (p + q)
     return 0.5 * kl_divergence(p, m, eps) + 0.5 * kl_divergence(q, m, eps)
+    
+def rand_tail_penalty(u, v, labels, k=2.0, q=0.25, margin=0.05):
+    B = u.size(0)
+    x = F.normalize(torch.cat([u, v], 0), dim=-1)           # (2B, d)
+    S = x @ x.T                                              # all pairwise cosines
 
+    # mask: drop self-pairs and the true labelled pairs (u_i, v_i)
+    mask = ~torch.eye(2 * B, dtype=torch.bool, device=x.device)
+    idx = torch.arange(B, device=x.device)
+    mask[idx, idx + B] = False
+    mask[idx + B, idx] = False
+    rand = S[mask]
+
+    mu_r, sd_r = rand.mean(), rand.std()
+
+    cos = F.cosine_similarity(u, v, dim=-1)
+    low = labels <= torch.quantile(labels, q)
+    cos_low = cos[low].mean().detach()          # anchor: don't let the penalty move real pairs
+
+    pen = F.relu(mu_r + k * sd_r - cos_low + margin)
+    return pen
+
+def rand_mean_penalty(u, v, tau=0.10):
+    x = F.normalize(torch.cat([u, v], 0), dim=-1)
+    n = x.size(0); s = x.sum(0)
+    rm = (s @ s - n) / (n * (n - 1))        # in-batch rand_mean
+    return F.relu(rm - tau)
+    
 @register_loss("Batch_JS_div")
-def Batch_JS_div(embedding1, embedding2, labels, norm, tau):
+def Batch_JS_div(embedding1, embedding2, labels, norm, tau, alpha = 0.025):
 
     norm_func = NORM_FUNCTIONS[norm]
     labels_norm = norm_func(labels)
 
     cos_sim = F.cosine_similarity(embedding1, embedding2)
-    cos_sim = norm_func(cos_sim)
+    if norm != 'max':
+        cos_sim = norm_func(cos_sim)
     cos_prob = F.softmax(cos_sim/tau, dim=0)
     label_prob = F.softmax(labels_norm/tau, dim=0)
 
     
     js_loss = js_divergence(label_prob, cos_prob)
-    loss = js_loss
-
+    if norm != 'max':
+        loss = js_loss + alpha * rand_mean_penalty(embedding1, embedding2)
+    else:
+        loss = js_loss
     return loss
 
 
