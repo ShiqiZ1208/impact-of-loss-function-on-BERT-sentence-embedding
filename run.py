@@ -166,8 +166,12 @@ def run(config, seeds, is_seed, verbose=False):
 
           ct_test_datasets = prepare_CT_eval_datasets(eval_ct_datasets_name)
           rt_test_datasets = prepare_RT_eval_datasets(eval_rt_datasets_name)
-          all_runs = [] 
-          for runs in range(config['total_runs']):
+          all_runs = []
+          if loss_name == 'without_ft':
+              n_run = 1
+          else:
+              n_run = config['total_runs']
+          for runs in range(n_run):
             if is_seed == True:
               set_seed(seeds[runs])
             print(f"runs: {runs}\n")
