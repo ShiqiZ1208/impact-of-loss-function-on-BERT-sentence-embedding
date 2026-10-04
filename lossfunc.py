@@ -142,13 +142,11 @@ def softmax_MSE(embedding1, embedding2, labels, norm):
 
 @register_loss("Batch_KL_div")
 def Batch_KL_div(embedding1, embedding2, labels, norm, tau =1.0 ):
-    #norm_func = NORM_FUNCTIONS[norm]
-    #labels_norm = norm_func(labels)
-    eps = 1e-8
-    labels_norm = labels
+    labels_norm = NORM_FUNCTIONS[norm](labels)
+
     cos_sim = F.cosine_similarity(embedding1, embedding2)
-    cos_sim = (cos_sim - cos_sim.min()) / (cos_sim.max() - cos_sim.min() + eps)
-    labels_norm = (labels_norm - labels_norm.min()) / (labels_norm.max() - labels_norm.min() + eps)
+    cos_sim = NORM_FUNCTIONS[norm](cos_sim)
+    
     cos_prob = F.softmax(cos_sim/tau, dim=0)
     label_prob = F.softmax(labels_norm/tau, dim=0)
 
