@@ -26,6 +26,7 @@ NORM_FUNCTIONS = {
     "none": lambda x: x,  # No normalization
     "minmax": lambda x: (x - torch.min(x)) / (torch.max(x) - torch.min(x) + 1e-8),
     "zero_one": lambda x: x/5,
+    "max": lambda x: x / torch.max(x),
     "neg_one": lambda x:((x/5)*2-1)
 }
 
