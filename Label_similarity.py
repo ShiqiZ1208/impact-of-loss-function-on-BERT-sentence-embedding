@@ -14,36 +14,55 @@ def to_np(x):
         return x.detach().cpu().float().numpy()
     return np.asarray(x, dtype=float)
     
-def generate_distribution(model_name, pooling, loss_name, train_dataset, test_dataset_name, cosine_similarity, labels):
+def generate_distribution(model_name, pooling, loss_name, train_dataset, test_dataset_name,
+                          cosine_similarity, labels, rand_mean=None, rand_cos=None):
     '''
     generate distribution graph using matplot
-    input: model, tokenizer, data, spearman, loop num. loss name, display_label = False(if true will generate true label distribution)
+    rand_mean: optional float, mean cosine of random sentence pairs (drawn as a vertical line)
+    rand_cos:  optional array of random-pair cosines (drawn as a third density curve)
     '''
     directory = f"prediction_distribution/{model_name}_use_{pooling}/{loss_name}_on_{train_dataset}"
     cosine_similarity = to_np(cosine_similarity)
     labels = to_np(labels)
     if labels.max() > 1:
         labels = (labels - labels.min()) / (labels.max() - labels.min())
+    if rand_cos is not None:
+        rand_cos = to_np(rand_cos)
+        if rand_mean is None:
+            rand_mean = float(rand_cos.mean())
     model_name = model_name.replace("/", "_")
 
     if not os.path.exists(directory):
-        os.makedirs(directory)  # Create the directory (including parent dirs if needed)
+        os.makedirs(directory)
         print(f"Created directory: {directory}")
 
     sns.set_theme(style="whitegrid")
     plt.figure(figsize=(8, 5))
-    lo = min(labels.min(), cosine_similarity.min())
+    lo_candidates = [labels.min(), cosine_similarity.min()]
+    if rand_cos is not None:
+        lo_candidates.append(rand_cos.min())
+    lo = min(lo_candidates)
     bins = np.linspace(lo, 1.0, 51)
 
     # light histograms in the background
     sns.histplot(labels, bins=bins, stat="density", color="steelblue", alpha=0.2, edgecolor=None)
-    sns.histplot(cosine_similarity,    bins=bins, stat="density", color="darkorange", alpha=0.2, edgecolor=None)
+    sns.histplot(cosine_similarity, bins=bins, stat="density", color="darkorange", alpha=0.2, edgecolor=None)
 
     # smooth density curves on top
     sns.kdeplot(labels, fill=True, color="steelblue", alpha=0.35, linewidth=2,
                 clip=(0, 1), bw_adjust=0.8, label="gold (rescaled 0–1)")
     sns.kdeplot(cosine_similarity, fill=True, color="darkorange", alpha=0.35, linewidth=2,
                 clip=(lo, 1), bw_adjust=0.8, label="cosine similarity")
+
+    # random-pair distribution (optional)
+    if rand_cos is not None:
+        sns.kdeplot(rand_cos, fill=True, color="gold", alpha=0.30, linewidth=2,
+                    clip=(lo, 1), bw_adjust=0.8, label="random pairs")
+
+    # random-pair mean (vertical line)
+    if rand_mean is not None:
+        plt.axvline(rand_mean, color="goldenrod", linestyle="--", linewidth=2.2,
+                    label=f"rand_mean = {rand_mean:.3f}")
 
     plt.xlabel("similarity")
     plt.ylabel("density")
