@@ -45,21 +45,11 @@ training:
   losses: #choose the loss functions and the hyperparameters for loss functions
      - {loss_name: without_ft, loss_type: emb, loss_kwargs: {}}
      - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: zero_one}}
-    # - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: none}}
-    # - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: minmax}}
      - {loss_name: Batch_JS_div, loss_type: emb, loss_kwargs: {norm: minmax, tau: 1.0}}
-    # - {loss_name: Batch_JS_div, loss_type: emb, loss_kwargs: {norm: none, tau: 1.0}}
-    # - {loss_name: softmax_MSE, loss_type: emb, loss_kwargs: {norm: minmax}}
      - {loss_name: cosent_loss, loss_type: emb, loss_kwargs: {tau: 20.0}}
      - {loss_name: ibn, loss_type: emb, loss_kwargs: {tau: 20.0, threshold: 0.5}}
      - {loss_name: angle_loss, loss_type: emb, loss_kwargs: {tau: 20.0}}
-    # - {loss_name: pearson_loss, loss_type: emb, loss_kwargs: {}}
      - {loss_name: mean_adjust_MSE, loss_type: emb, loss_kwargs: {norm: none}}
-    # - {loss_name: cosent_ibn_angle, loss_type: emb, loss_kwargs: {w_cosent: 1, w_ibn: 1, w_angle: 1, tau_cosent: 20.0, tau_ibn: 20.0, tau_angle: 1.0}}
-    # - {loss_name: cosent_batch_jsd, loss_type: emb, loss_kwargs: {norm: divided_by_maximum, tau_cosent: 20.0, w_jsd: 0.3}}
-    # - {loss_name: triplet, loss_type: emb, loss_kwargs: {margin: 1.0, minimum: 0.0, eps: 1.0e-6, distance: Eucliden}}
-    # - {loss_name: triplet, loss_type: emb, loss_kwargs: {margin: 0.3, minimum: 0.0, eps: 1.0e-6, distance: cos_sim}}
-    # - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: neg_one}}
   train_name: ['STS-B'] #training dataset, can be STS-B or SemRel
   test_sts_name: ['SICK-R', 'STS17', 'BIOSSES', 'SemRel'] #evaluation datasets on some STS datasets
   test_sp_name: ['QQP', 'MRPC', 'snli'] # sentence pair classification evaluation datasets
