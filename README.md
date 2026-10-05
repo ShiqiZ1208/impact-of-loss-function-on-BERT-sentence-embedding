@@ -32,17 +32,17 @@ cd /impact-of-loss-function-on-BERT-sentence-embedding
 python run.py
 ```
 - We have a quick start colab notebooks [sample_run_on_sentenceEmbedding](https://github.com/ShiqiZ1208/impact-of-loss-function-on-BERT-sentence-embedding/blob/main/sample_run_on_sentenceEmbedding.ipynb)
-## Performance Graph
+## config YAML file
 ```bash
 training:
-  model_id: 'FacebookAI/roberta-base' #"bert-base-uncased" #'FacebookAI/roberta-base', 'meta-llama/Llama-3.2-1B'
-  pooling: "mean" #'cls', 'max'
-  batch_size: 90
-  learning_rate: 5.0e-5
-  num_epochs: 10
-  total_runs: 5
-  graph: 1 # 1 for true 2 for false
-  losses:
+  model_id: 'FacebookAI/roberta-base' #base model for sentence embedding model
+  pooling: "mean" #pooling strategy
+  batch_size: 90 #batch size for fine-tuning
+  learning_rate: 5.0e-5 #learning rate for fine-tuning
+  num_epochs: 10 #number of epoch for training dataset
+  total_runs: 5 #number of runs
+  graph: 1 #plot graphs
+  losses: #choose the loss functions and the hyperparameters for loss functions
      - {loss_name: without_ft, loss_type: emb, loss_kwargs: {}}
      - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: zero_one}}
     # - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: none}}
@@ -60,17 +60,17 @@ training:
     # - {loss_name: triplet, loss_type: emb, loss_kwargs: {margin: 1.0, minimum: 0.0, eps: 1.0e-6, distance: Eucliden}}
     # - {loss_name: triplet, loss_type: emb, loss_kwargs: {margin: 0.3, minimum: 0.0, eps: 1.0e-6, distance: cos_sim}}
     # - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: neg_one}}
-  train_name: ['STS-B'] #['STS', 'nli', 'snli', 'SemRel']
-  test_sts_name: ['SICK-R', 'STS17', 'BIOSSES', 'SemRel']
-  test_sp_name: ['QQP', 'MRPC', 'snli'] # 'multi_nli', 'RTE'
-  test_cl_name: ['MR', 'CR', 'subj', 'sms_spam']
-  test_ct_name: ['news_cluster', 'reddit', 'biorxiv', 'stack']
-  test_rt_name: ['scifact', 'nfcorpus', 'arguana']
-  evaluation_metric: ['spearman', 'pearson', 'rand_mean', 'isoscore', 'disc_gap']
-  evaluation_metric_sp: ['AP', 'ROC_AUC', 'F1', 'accuracy', 'f1_threshold', 'ac_threshold']
-  evaluation_metric_cl: ['ACC', 'F1']
-  evaluation_metric_ct: ['v_measure', 'nmi', 'ari']
-  evaluation_metric_rt: ['nDCG', 'Recall']
+  train_name: ['STS-B'] #training dataset, can be STS-B or SemRel
+  test_sts_name: ['SICK-R', 'STS17', 'BIOSSES', 'SemRel'] #evaluation datasets on some STS datasets
+  test_sp_name: ['QQP', 'MRPC', 'snli'] # sentence pair classification evaluation datasets
+  test_cl_name: ['MR', 'CR', 'subj', 'sms_spam'] # single sentence classification evaluation datasets
+  test_ct_name: ['news_cluster', 'reddit', 'biorxiv', 'stack'] # clustering evaluation datasets
+  test_rt_name: ['scifact', 'nfcorpus', 'arguana'] # retrieval evaluation datasets
+  evaluation_metric: ['spearman', 'pearson', 'rand_mean', 'isoscore', 'disc_gap'] # evaluation metrics for STS datasets
+  evaluation_metric_sp: ['AP', 'ROC_AUC', 'F1', 'accuracy', 'f1_threshold', 'ac_threshold'] # evaluation metric for sentence pair datasets
+  evaluation_metric_cl: ['ACC', 'F1'] # evaluation metric for single sentence classification datasets
+  evaluation_metric_ct: ['v_measure', 'nmi', 'ari'] # evalluation for clustering datasets
+  evaluation_metric_rt: ['nDCG', 'Recall'] # evalluation for retrieval datasets
 ```
 ## Datasets
 -STS-B: The Semantic Textual Similarity Benchmark (STS-B) is part of the GLUE benchmark and was originally introduced in the Semantic Evaluation (SemEval) 2017 shared task. It was designed to evaluate how well systems can measure the semantic similarity between two sentences on a scale from 0 (no meaning overlap) to 5 (equivalent meaning).
