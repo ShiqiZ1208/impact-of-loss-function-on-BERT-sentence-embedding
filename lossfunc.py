@@ -116,10 +116,7 @@ def Batch_JS_div(embedding1, embedding2, labels, norm, tau, alpha = 0.025):
 
     
     js_loss = js_divergence(label_prob, cos_prob)
-    if norm != 'max':
-        loss = js_loss + alpha * rand_mean_penalty(embedding1, embedding2)
-    else:
-        loss = js_loss
+    loss = js_loss
     return loss
 
 
