@@ -1,15 +1,20 @@
 # Impact-of-loss-function-on-BERT-sentence-embedding
 A sentence embedding evaluation framework that tests the impact of different loss functions (Cosine similarity mean square error, COSENT, IN-Batch Negative, Angle loss and combination of various losses) on the quality and performance of sentence embeddings on STS datasets (STS-B, STS 12 to STS 16 and STS-K).
-The detail article is on overleaf project: https://www.overleaf.com/read/bzzbwqfxgrpn#1076e2
 
 
 ## Describtion on each python file
 
-- Prepare_STS.py: prepare_STS.py file is the python file include build dataloader of STS datasets.
+- Preprocess.py: Preprocess.py file is the python file include build dataloader of STS datasets and other evaluation datasets.
   
 - Loss_Functions.py: Loss_Functions.py file is the python file include various of loss functions include default cosine similarity, COSENT, IBN and Angle losses and the combination of loss
   
-- TrainSE.py: TrainSE.py file is the python file that has Training loop, evaluation function and base model.
+- TrainSE.py: TrainSE.py file is the python file that has Training loop, evaluation functions.
+
+- run.py: run.py is the python file that include the body of the code.
+
+- config.yaml: config.yaml is a yaml file that include all hyperparameter and setting for the code.
+
+- Label_similarity.py: this file contain helper function for graphing illustrations.
 
 ## How to run the code
 Follow the steps below to set up and run the project:
@@ -29,7 +34,7 @@ python run.py
 - We have a quick start colab notebooks [sample_run_on_sentenceEmbedding](https://github.com/ShiqiZ1208/impact-of-loss-function-on-BERT-sentence-embedding/blob/main/sample_run_on_sentenceEmbedding.ipynb)
 ## Performance Graph
 
-![Model Performance](result.png)
+
 
 ## Datasets
 -STS-B: The Semantic Textual Similarity Benchmark (STS-B) is part of the GLUE benchmark and was originally introduced in the Semantic Evaluation (SemEval) 2017 shared task. It was designed to evaluate how well systems can measure the semantic similarity between two sentences on a scale from 0 (no meaning overlap) to 5 (equivalent meaning).
