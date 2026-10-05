@@ -33,9 +33,45 @@ python run.py
 ```
 - We have a quick start colab notebooks [sample_run_on_sentenceEmbedding](https://github.com/ShiqiZ1208/impact-of-loss-function-on-BERT-sentence-embedding/blob/main/sample_run_on_sentenceEmbedding.ipynb)
 ## Performance Graph
-
-
-
+```bash
+training:
+  model_id: 'FacebookAI/roberta-base' #"bert-base-uncased" #'FacebookAI/roberta-base', 'meta-llama/Llama-3.2-1B'
+  pooling: "mean" #'cls', 'max'
+  batch_size: 90
+  learning_rate: 5.0e-5
+  num_epochs: 10
+  total_runs: 5
+  graph: 1 # 1 for true 2 for false
+  losses:
+     - {loss_name: without_ft, loss_type: emb, loss_kwargs: {}}
+     - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: zero_one}}
+    # - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: none}}
+    # - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: minmax}}
+     - {loss_name: Batch_JS_div, loss_type: emb, loss_kwargs: {norm: minmax, tau: 1.0}}
+    # - {loss_name: Batch_JS_div, loss_type: emb, loss_kwargs: {norm: none, tau: 1.0}}
+    # - {loss_name: softmax_MSE, loss_type: emb, loss_kwargs: {norm: minmax}}
+     - {loss_name: cosent_loss, loss_type: emb, loss_kwargs: {tau: 20.0}}
+     - {loss_name: ibn, loss_type: emb, loss_kwargs: {tau: 20.0, threshold: 0.5}}
+     - {loss_name: angle_loss, loss_type: emb, loss_kwargs: {tau: 20.0}}
+    # - {loss_name: pearson_loss, loss_type: emb, loss_kwargs: {}}
+     - {loss_name: mean_adjust_MSE, loss_type: emb, loss_kwargs: {norm: none}}
+    # - {loss_name: cosent_ibn_angle, loss_type: emb, loss_kwargs: {w_cosent: 1, w_ibn: 1, w_angle: 1, tau_cosent: 20.0, tau_ibn: 20.0, tau_angle: 1.0}}
+    # - {loss_name: cosent_batch_jsd, loss_type: emb, loss_kwargs: {norm: divided_by_maximum, tau_cosent: 20.0, w_jsd: 0.3}}
+    # - {loss_name: triplet, loss_type: emb, loss_kwargs: {margin: 1.0, minimum: 0.0, eps: 1.0e-6, distance: Eucliden}}
+    # - {loss_name: triplet, loss_type: emb, loss_kwargs: {margin: 0.3, minimum: 0.0, eps: 1.0e-6, distance: cos_sim}}
+    # - {loss_name: cosine_similarity_mse_norm, loss_type: emb, loss_kwargs: {norm: neg_one}}
+  train_name: ['STS-B'] #['STS', 'nli', 'snli', 'SemRel']
+  test_sts_name: ['SICK-R', 'STS17', 'BIOSSES', 'SemRel']
+  test_sp_name: ['QQP', 'MRPC', 'snli'] # 'multi_nli', 'RTE'
+  test_cl_name: ['MR', 'CR', 'subj', 'sms_spam']
+  test_ct_name: ['news_cluster', 'reddit', 'biorxiv', 'stack']
+  test_rt_name: ['scifact', 'nfcorpus', 'arguana']
+  evaluation_metric: ['spearman', 'pearson', 'rand_mean', 'isoscore', 'disc_gap']
+  evaluation_metric_sp: ['AP', 'ROC_AUC', 'F1', 'accuracy', 'f1_threshold', 'ac_threshold']
+  evaluation_metric_cl: ['ACC', 'F1']
+  evaluation_metric_ct: ['v_measure', 'nmi', 'ari']
+  evaluation_metric_rt: ['nDCG', 'Recall']
+```
 ## Datasets
 -STS-B: The Semantic Textual Similarity Benchmark (STS-B) is part of the GLUE benchmark and was originally introduced in the Semantic Evaluation (SemEval) 2017 shared task. It was designed to evaluate how well systems can measure the semantic similarity between two sentences on a scale from 0 (no meaning overlap) to 5 (equivalent meaning).
 The STS-B dataset includes sentence pairs drawn from various sources like news headlines, image captions, and forums, with human-annotated similarity scores.
