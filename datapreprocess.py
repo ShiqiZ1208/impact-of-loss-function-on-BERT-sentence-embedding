@@ -182,6 +182,10 @@ def get_sts_dataset(dataset_name, split='test', is_triplet=False):
     if dataset_name == 'STS-B':
         dataset = load_dataset('mteb/stsbenchmark-sts', split=split)
         return dataset.rename_column('score', 'labels')
+
+    if dataset_name == 'STS-B-dev':   # official STS-B validation split, used to choose hyperparameters
+        dataset = load_dataset('mteb/stsbenchmark-sts', split='validation')
+        return dataset.rename_column('score', 'labels')
     
     if dataset_name == "SemRel":
         dataset = load_dataset("SemRel/SemRel2024", 'eng', split=split)
@@ -395,7 +399,7 @@ def get_RT_dataset(dataset_name):
 # use a list for user input, give user warning if the dataset name is invalid
 NLI_KEYS = ("snli", "multi_nli", "nli")
 STS_BENCHMARKS = ['STS-B', 'STS12', 'STS13', 'STS14', 'STS15', 'STS16', 'SICK-R']
-STS_VALID_NAME = STS_BENCHMARKS + ['STS17', 'BIOSSES', 'SemRel']
+STS_VALID_NAME = STS_BENCHMARKS + ['STS17', 'BIOSSES', 'SemRel', 'STS-B-dev']
 SENTENCE_PAIR_VALID_NAME = ['QQP', 'MRPC', 'snli', 'multi_nli', 'RTE']
 CLASSIFICATION_VALID_NAME = ['MR', 'CR', 'subj', 'sms_spam']
 CLUSTERING_VALID_NAME = ['news_cluster', 'reddit', 'biorxiv', 'stack']
@@ -428,17 +432,18 @@ def prepare_train_dataset(dataset_name, split=0.3, seed=42):
     if dataset_name in NLI_KEYS:
         return get_sts_dataset(dataset_name, is_triplet=is_triplet), []
  
-    if dataset_name == "STS":
-        return (get_sts_dataset('STS-B', split='train'),
-                get_sts_dataset('STS-B', split='validation'))
+    if dataset_name == "STS-B":
+        return get_sts_dataset('STS-B', split='train'), get_sts_dataset('STS-B', split='validation')
  
     if dataset_name == "SemRel":
-        return (get_sts_dataset('SemRel', split='train'),
-                get_sts_dataset('SemRel', split='dev'))
+        return get_sts_dataset('SemRel', split='train'), get_sts_dataset('SemRel', split='dev')
  
-    if dataset_name in ('STS-B', 'STS-ablation'):
+    if dataset_name in ('STS', 'STS-ablation'):
         return get_sts_dataset('STS-B', split='train'), []
- 
+
+    if dataset_name == 'STS12':   # official SemEval-2012 train split (mteb/sts12-sts has train + test)
+        return load_dataset('mteb/sts12-sts', split='train').rename_column('score', 'labels'), []
+
     return STS_train_test_split(dataset_name, split=split, seed=seed)['train'], []
 
 
@@ -458,19 +463,19 @@ def prepare_SP_eval_datasets(names = ['QQP']):
 def prepare_CL_eval_datasets(names = ['MR']):
     for n in names:
         if n not in CLASSIFICATION_VALID_NAME:
-            raise ValueError(f"Unknown Sentence pair eval dataset: {n}. Choose from {CLASSIFICATION_VALID_NAME}")
+            raise ValueError(f"Unknown classification eval dataset: {n}. Choose from {CLASSIFICATION_VALID_NAME}")
     return {n: get_CL_dataset(n) for n in names}
 
 def prepare_CT_eval_datasets(names = ['news_cluster']):
     for n in names:
         if n not in CLUSTERING_VALID_NAME:
-            raise ValueError(f"Unknown Sentence pair eval dataset: {n}. Choose from {CLUSTERING_VALID_NAME}")
+            raise ValueError(f"Unknown clustering eval dataset: {n}. Choose from {CLUSTERING_VALID_NAME}")
     return {n: get_CT_dataset(n) for n in names}
 
 def prepare_RT_eval_datasets(names = ['scifact']):
     for n in names:
         if n not in RETRIEVAL_VALID_NAME:
-            raise ValueError(f"Unknown Sentence pair eval dataset: {n}. Choose from {CLUSTERING_VALID_NAME}")
+            raise ValueError(f"Unknown retrieval eval dataset: {n}. Choose from {RETRIEVAL_VALID_NAME}")
     return {n: get_RT_dataset(n) for n in names}
 
 

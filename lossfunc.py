@@ -4,6 +4,11 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from scipy.stats import pearsonr
 
+# Mechanism study (Test 2): losses write their batch predictions / targets here and
+# RunRecorder.log_step in TrainerSE.py reads them.
+#   TRACE['p'] = predicted cosines (1-D), TRACE['y'] = the targets THIS loss trains on
+TRACE = {}
+
 _loss_registry = {}
 
 def register_loss(name):
@@ -39,7 +44,8 @@ def cosine_similarity_mse_norm(embedding1, embedding2, labels, norm):
 
     squared_difference = (labels_norm - cos_sim) ** 2
     loss = squared_difference.mean()
-
+    TRACE['p'] = cos_sim.detach()   # predicted cosines for the batch (1-D)
+    TRACE['y'] = labels_norm.detach()     # the target THIS loss trains on
 
     return loss
 
@@ -54,16 +60,19 @@ def scale_labels_to_target(labels, target_mean, target_variance, eps=1e-8):
     return scaled_labels
 
 @register_loss('mean_adjust_MSE')
-def cosine_similarity_mse_norm(embedding1, embedding2, labels, norm):
+def mean_adjust_MSE(embedding1, embedding2, labels, norm):
+    # Same MSE as cosine_similarity_mse_norm; the "mean adjust" happens in run.py,
+    # which rescales the training labels to the model's cosine mean/variance first.
     norm_func = NORM_FUNCTIONS[norm]
     labels_norm = norm_func(labels)
-
+    #print(labels_norm)
     cos_sim = F.cosine_similarity(embedding1, embedding2)
 
 
     squared_difference = (labels_norm - cos_sim) ** 2
     loss = squared_difference.mean()
-
+    TRACE['p'] = cos_sim.detach()   # predicted cosines for the batch (1-D)
+    TRACE['y'] = labels_norm.detach()     # the target THIS loss trains on
     return loss
 
 def kl_divergence(p, q, eps=1e-12):
@@ -109,11 +118,12 @@ def Batch_JS_div(embedding1, embedding2, labels, norm, tau, alpha = 0.025):
     labels_norm = norm_func(labels)
 
     cos_sim = F.cosine_similarity(embedding1, embedding2)
+    TRACE['p'] = cos_sim.detach()   # predicted cosines for the batch (1-D)
+    TRACE['y'] = labels_norm.detach()     # the target THIS loss trains on
     if norm != 'max':
         cos_sim = norm_func(cos_sim)
     cos_prob = F.softmax(cos_sim/tau, dim=0)
     label_prob = F.softmax(labels_norm/tau, dim=0)
-
     
     js_loss = js_divergence(label_prob, cos_prob)
     loss = js_loss
@@ -171,6 +181,10 @@ def triplet(embedding1, embedding2, embedding3, margin, minimum, eps, distance):
 
 @register_loss("cosent_loss")
 def cosent_loss(embedding1, embedding2, labels, tau=20.0):
+    cos_sim = F.cosine_similarity(embedding1, embedding2)
+    labels_norm = labels / 5
+    TRACE['p'] = cos_sim.detach()   # predicted cosines for the batch (1-D)
+    TRACE['y'] = labels_norm.detach() 
     labels = (labels[:, None] < labels[None, :]).float()
     embedding1 = F.normalize(embedding1, p=2, dim=1)
     embedding2 = F.normalize(embedding2, p=2, dim=1)
@@ -359,9 +373,9 @@ def in_batch_negative_loss_equivalent(embedding1, embedding2, labels, tau=20, th
 
 @register_loss("cosent_batch_jsd")
 def cosent_batch_jsd(embedding1, embedding2, labels, norm='divided_by_maximum',
-                      tau_cosent=20.0, w_jsd=0.3):
+                      tau_cosent=20.0, w_jsd=0.3, tau_jsd=1.0):
     cosent_l = cosent_loss(embedding1, embedding2, labels, tau_cosent)
-    jsd_l = Batch_JS_div(embedding1, embedding2, labels, norm)
+    jsd_l = Batch_JS_div(embedding1, embedding2, labels, norm, tau_jsd)
 
     scale = cosent_l.detach() / (jsd_l.detach() + 1e-8)
 

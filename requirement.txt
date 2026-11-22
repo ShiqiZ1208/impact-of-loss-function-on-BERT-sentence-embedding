@@ -1,7 +1,14 @@
 torch
 datasets
 transformers
+numpy>=2.0
+scipy
+scikit-learn
+pandas
+pyyaml
+tqdm
 IsoScore
 umap-learn
 matplotlib
 seaborn
+mteb>=2.0

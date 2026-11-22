@@ -9,6 +9,16 @@ import seaborn as sns
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.metrics import ConfusionMatrixDisplay
 
+GRAPH_ROOT = "illustration"   # parent folder of every graph saved by this file
+RUN_TAG = ""   # set by run.py: hyperparameters of the current run, e.g. "mean_lr5e-05_bs90_ep1"
+
+def graph_dir(kind, model_id, pooling, loss_name, train_name):
+    '''graphs/<evaluation>/<model>/<hyperparameters>/<loss>_on_<train set>/'''
+    directory = os.path.join(GRAPH_ROOT, kind, model_id.replace("/", "_"),
+                             RUN_TAG or pooling, f"{loss_name}_on_{train_name}")
+    os.makedirs(directory, exist_ok=True)
+    return directory
+
 def to_np(x):
     if torch.is_tensor(x):
         return x.detach().cpu().float().numpy()
@@ -21,7 +31,7 @@ def generate_distribution(model_name, pooling, loss_name, train_dataset, test_da
     rand_mean: optional float, mean cosine of random sentence pairs (drawn as a vertical line)
     rand_cos:  optional array of random-pair cosines (drawn as a third density curve)
     '''
-    directory = f"prediction_distribution/{model_name}_use_{pooling}/{loss_name}_on_{train_dataset}"
+    directory = graph_dir("STS_distribution", model_name, pooling, loss_name, train_dataset)
     cosine_similarity = to_np(cosine_similarity)
     labels = to_np(labels)
     if labels.max() > 1:
@@ -30,12 +40,6 @@ def generate_distribution(model_name, pooling, loss_name, train_dataset, test_da
         rand_cos = to_np(rand_cos)
         if rand_mean is None:
             rand_mean = float(rand_cos.mean())
-    model_name = model_name.replace("/", "_")
-
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-        print(f"Created directory: {directory}")
-
     sns.set_theme(style="whitegrid")
     plt.figure(figsize=(8, 5))
     lo_candidates = [labels.min(), cosine_similarity.min()]
@@ -74,10 +78,7 @@ def generate_distribution(model_name, pooling, loss_name, train_dataset, test_da
         
 
 def generate_random_pair_distribution(cos_sim, loss_name, model_id, pooling, train_name, test_name):
-      directory = f"Anistropy_Anlysis/random_embedding/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
-      if not os.path.exists(directory):
-          os.makedirs(directory)
-          print(f"Created directory: {directory}")
+      directory = graph_dir("random_pair", model_id, pooling, loss_name, train_name)
 
       plt.hist(cos_sim, bins=100, density=True, alpha=0.7, label=model_id)
       plt.title(f"Anisotropy: {model_id}")
@@ -89,7 +90,7 @@ def generate_random_pair_distribution(cos_sim, loss_name, model_id, pooling, tra
       plt.savefig(f'{directory}/{test_name}_random_Embedding.png')
       plt.close()
 
-def plot_isoscore(n_comp=100, path="./Anistropy/chart/all.npz", out_dir="./Anistropy/chart"):
+def plot_isoscore(n_comp=100, path="./Anistropy/chart/all.npz", out_dir=os.path.join(GRAPH_ROOT, "isoscore")):
     data = np.load(path)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -134,9 +135,7 @@ def plot_isoscore(n_comp=100, path="./Anistropy/chart/all.npz", out_dir="./Anist
 
 def plot_clusters(embeddings, labels, pred, model_id, pooling, loss_name, train_name,
                   test_name, n_points=5000, seed=None):
-    # output folder, e.g. cluster/bert-base-uncased_use_mean/Batch_JS_div_on_STS-B
-    directory = f"cluster/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
-    os.makedirs(directory, exist_ok=True)
+    directory = graph_dir("clustering", model_id, pooling, loss_name, train_name)
 
     # L2-normalize so distances behave like cosine distance
     X = np.asarray(embeddings, dtype=np.float32)
@@ -183,8 +182,7 @@ def plot_clusters(embeddings, labels, pred, model_id, pooling, loss_name, train_
 
 def plot_SP_threshold(test_sims, test_labels, thr, model_id, pooling, loss_name,
                       train_name, test_name):
-    directory = f"sentence_pair/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
-    os.makedirs(directory, exist_ok=True)
+    directory = graph_dir("sentence_pair", model_id, pooling, loss_name, train_name)
 
     sims = np.asarray(test_sims, dtype=float)
     labels = np.asarray(test_labels).astype(int)
@@ -213,8 +211,7 @@ def plot_SP_threshold(test_sims, test_labels, thr, model_id, pooling, loss_name,
 
 def plot_confusion(y_true, y_pred, model_id, pooling, loss_name, train_name,
                    test_name, class_names=None):
-    directory = f"classification/{model_id}_use_{pooling}/{loss_name}_on_{train_name}"
-    os.makedirs(directory, exist_ok=True)
+    directory = graph_dir("classification", model_id, pooling, loss_name, train_name)
 
     fig, ax = plt.subplots(figsize=(6, 5))
     ConfusionMatrixDisplay.from_predictions(
@@ -225,5 +222,25 @@ def plot_confusion(y_true, y_pred, model_id, pooling, loss_name, train_name,
 
     save_path = os.path.join(directory, f"{test_name}_confusion.png")
     plt.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+def plot_epoch_curve(epoch_log, model_id, pooling, loss_name, train_name):
+    '''validation Spearman after each epoch (from RunRecorder.epoch_log); the best epoch is marked'''
+    directory = graph_dir("epoch_curve", model_id, pooling, loss_name, train_name)
+    epochs = [e['epoch'] + 1 for e in epoch_log]
+    scores = [float(e['val_spearman']) for e in epoch_log]
+    best = int(np.argmax(scores))
+
+    plt.figure(figsize=(7, 4.5))
+    plt.plot(epochs, scores, marker='o', linewidth=2)
+    plt.axvline(epochs[best], color='k', linestyle='--',
+                label=f"best: epoch {epochs[best]} ({scores[best]:.4f})")
+    plt.xticks(epochs)
+    plt.xlabel("epoch"); plt.ylabel("validation Spearman")
+    plt.title(f"{loss_name} on {train_name} ({model_id})")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(directory, "epoch_curve.png"), dpi=150)
     plt.close()
 
